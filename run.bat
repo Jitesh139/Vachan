@@ -15,21 +15,21 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-:: 2. Ensure virtual environment exists
-if not exist "venv\Scripts\activate.bat" (
-    echo [1/3] Setting up virtual environment...
-    python -m venv venv
-    if %errorlevel% neq 0 (
-        echo [ERROR] Could not create virtual environment.
-        pause
-        exit /b 1
-    )
-    call venv\Scripts\activate.bat
-    echo Installing dependencies...
-    pip install -r requirements.txt
-) else (
+:: 2. Check virtual environment or global Python
+if exist "venv\Scripts\activate.bat" (
     echo [1/3] Activating virtual environment...
     call venv\Scripts\activate.bat
+) else (
+    python -c "import PySide6" >nul 2>&1
+    if %errorlevel% equ 0 (
+        echo [1/3] Using Python environment (PySide6 ready)...
+    ) else (
+        echo [1/3] Setting up virtual environment...
+        python -m venv venv
+        call venv\Scripts\activate.bat
+        echo Installing dependencies...
+        pip install -r requirements.txt
+    )
 )
 
 :: 3. Ensure offline Bible database is initialized
