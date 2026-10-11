@@ -1,5 +1,5 @@
 @echo off
-setlocal enabledelayedexpansion
+cd /d "%~dp0"
 
 echo =====================================================================
 echo                     VACHAN - LIVE LAUNCHER
@@ -8,38 +8,28 @@ echo.
 
 :: 1. Check Python
 python --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] Python is not installed or not in your PATH.
-    echo Please install Python 3.11+ and try again.
-    pause
-    exit /b 1
-)
+if errorlevel 1 goto NO_PYTHON
 
-:: 2. Check virtual environment or global Python
-if exist "venv\Scripts\activate.bat" (
-    echo [1/3] Activating virtual environment...
-    call venv\Scripts\activate.bat
-) else (
-    python -c "import PySide6" >nul 2>&1
-    if %errorlevel% equ 0 (
-        echo [1/3] Using Python environment (PySide6 ready)...
-    ) else (
-        echo [1/3] Setting up virtual environment...
-        python -m venv venv
-        call venv\Scripts\activate.bat
-        echo Installing dependencies...
-        pip install -r requirements.txt
-    )
-)
+:: 2. Check virtual environment
+if not exist "venv\Scripts\activate.bat" goto NO_VENV
+echo [1/3] Activating virtual environment...
+call venv\Scripts\activate.bat
+goto AFTER_ENV
 
+:NO_VENV
+echo [1/3] Using system Python environment...
+
+:AFTER_ENV
 :: 3. Ensure offline Bible database is initialized
-if not exist "data\bibles\vachan_bibles.db" (
-    echo [2/3] Building local offline Bible database (KJV, WEB, ASV, Hindi IRV)...
-    python scripts\download_bibles.py
-) else (
-    echo [2/3] Local Bible database verified.
-)
+if exist "data\bibles\vachan_bibles.db" goto BIBLE_READY
+echo [2/3] Building local offline Bible database (KJV, WEB, ASV, Hindi IRV)...
+python scripts\download_bibles.py
+goto LAUNCH
 
+:BIBLE_READY
+echo [2/3] Local Bible database verified.
+
+:LAUNCH
 :: 4. Launch Application
 echo [3/3] Launching Vachan...
 echo.
@@ -53,8 +43,13 @@ echo.
 
 python main.py
 
-if %errorlevel% neq 0 (
-    echo.
-    echo [Notice] The application has closed.
-    pause
-)
+echo.
+echo [Notice] The application has closed.
+pause
+goto :EOF
+
+:NO_PYTHON
+echo [ERROR] Python is not installed or not in your PATH.
+echo Please install Python 3.11+ and try again.
+pause
+exit /b 1
