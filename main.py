@@ -1,40 +1,61 @@
 """Vachan - Windows desktop app for live church streaming.
 
-Main application entrypoint.
+Composition Root:
+Instantiates the architectural adapters and wires them together:
+1. LiveAudioSource (Audio Input)
+2. WhisperTranscriber (STT)
+3. ReferenceParser (NLP/Regex Cues)
+4. LocalSqliteBibleProvider (Offline Scripture SQLite)
+5. VerseDisplayWindow (Broadcast Output Window)
+6. ControlWindow (Operator Dashboard)
 """
 
 import sys
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication
 
-
-class MainWindow(QMainWindow):
-    """Main window placeholder for Vachan operator dashboard."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.setWindowTitle("Vachan")
-        self.resize(800, 500)
-
-        # Central widget container
-        central_widget = QWidget(self)
-        layout = QVBoxLayout(central_widget)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Temporary placeholder label
-        label = QLabel("Vachan\nLive Bible Verse Detection System", self)
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setStyleSheet("font-size: 20px; font-weight: bold; color: #555;")
-        layout.addWidget(label)
-
-        self.setCentralWidget(central_widget)
+from vachan.audio.source import LiveAudioSource
+from vachan.bible.provider import LocalSqliteBibleProvider
+from vachan.output.verse_window import VerseDisplayWindow
+from vachan.parser.parser import ReferenceParser
+from vachan.stt.transcriber import WhisperTranscriber
+from vachan.ui.main_window import ControlWindow
 
 
 def main() -> int:
-    """Application main function."""
+    """Application entrypoint and composition root."""
+    # Enable High DPI scaling
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
     app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
+    app.setApplicationName("Vachan")
+
+    # 1. Instantiate Adapters
+    # Using device index 1 (Microphone Array - Intel SST) as chosen by the user
+    audio_source = LiveAudioSource(device_index=1, sample_rate=16000, chunk_duration_sec=2.5)
+
+    # Using 'large-v3' as chosen by user, with auto CUDA/CPU detection & fallback
+    transcriber = WhisperTranscriber(model_size="large-v3", device="auto", compute_type="default")
+
+    parser = ReferenceParser()
+    bible_provider = LocalSqliteBibleProvider()
+
+    # 2. Instantiate Windows
+    verse_window = VerseDisplayWindow(theme_name="Midnight")
+    control_window = ControlWindow(
+        audio_source=audio_source,
+        transcriber=transcriber,
+        parser=parser,
+        bible_provider=bible_provider,
+        verse_window=verse_window,
+    )
+
+    # 3. Show Windows
+    control_window.show()
+    # Also show the verse output window so operator can position or test it right away
+    verse_window.show()
+
     return app.exec()
 
 
