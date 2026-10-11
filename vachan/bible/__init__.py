@@ -1,1 +1,5 @@
-"""Bible translation and scripture retrieval service module."""
+"""Bible package exports."""
+
+from vachan.bible.provider import LocalSqliteBibleProvider
+
+__all__ = ["LocalSqliteBibleProvider"]
