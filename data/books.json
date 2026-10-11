@@ -1,0 +1,1094 @@
+[
+  {
+    "id": "GEN",
+    "name": "Genesis",
+    "abbreviations": [
+      "Gen",
+      "Ge",
+      "Gn"
+    ],
+    "hindi_name": "उत्पत्ति",
+    "roman_aliases": [
+      "utpatti",
+      "utpati"
+    ],
+    "chapter_count": 50
+  },
+  {
+    "id": "EXO",
+    "name": "Exodus",
+    "abbreviations": [
+      "Exod",
+      "Exo",
+      "Ex"
+    ],
+    "hindi_name": "निर्गमन",
+    "roman_aliases": [
+      "nirgaman"
+    ],
+    "chapter_count": 40
+  },
+  {
+    "id": "LEV",
+    "name": "Leviticus",
+    "abbreviations": [
+      "Lev",
+      "Le",
+      "Lv"
+    ],
+    "hindi_name": "लैव्यव्यवस्था",
+    "roman_aliases": [
+      "laivyavyavastha",
+      "levyavyavastha",
+      "levy"
+    ],
+    "chapter_count": 27
+  },
+  {
+    "id": "NUM",
+    "name": "Numbers",
+    "abbreviations": [
+      "Num",
+      "Nu",
+      "Nm",
+      "Nb"
+    ],
+    "hindi_name": "गिनती",
+    "roman_aliases": [
+      "ginti"
+    ],
+    "chapter_count": 36
+  },
+  {
+    "id": "DEU",
+    "name": "Deuteronomy",
+    "abbreviations": [
+      "Deut",
+      "Deu",
+      "Dt"
+    ],
+    "hindi_name": "व्यवस्थाविवरण",
+    "roman_aliases": [
+      "vyavasthavivaran",
+      "vyavastha vivaran"
+    ],
+    "chapter_count": 34
+  },
+  {
+    "id": "JOS",
+    "name": "Joshua",
+    "abbreviations": [
+      "Josh",
+      "Jos",
+      "Jsh"
+    ],
+    "hindi_name": "यहोशू",
+    "roman_aliases": [
+      "yahoshu",
+      "yehoshu",
+      "yahoshua"
+    ],
+    "chapter_count": 24
+  },
+  {
+    "id": "JDG",
+    "name": "Judges",
+    "abbreviations": [
+      "Judg",
+      "Jdg",
+      "Jg",
+      "Jdgs"
+    ],
+    "hindi_name": "न्यायियों",
+    "roman_aliases": [
+      "nyayiyon",
+      "nyayiyo",
+      "nyayi"
+    ],
+    "chapter_count": 21
+  },
+  {
+    "id": "RUT",
+    "name": "Ruth",
+    "abbreviations": [
+      "Rth",
+      "Ru"
+    ],
+    "hindi_name": "रूत",
+    "roman_aliases": [
+      "root",
+      "ruth"
+    ],
+    "chapter_count": 4
+  },
+  {
+    "id": "1SA",
+    "name": "1 Samuel",
+    "abbreviations": [
+      "1 Sam",
+      "1Sam",
+      "1 Sa",
+      "1Sa",
+      "1S",
+      "I Sam",
+      "I Sa"
+    ],
+    "hindi_name": "1 शमूएल",
+    "roman_aliases": [
+      "1 samuel",
+      "pehla samuel",
+      "1 shamuel",
+      "pehla shamuel",
+      "shamuvel"
+    ],
+    "chapter_count": 31
+  },
+  {
+    "id": "2SA",
+    "name": "2 Samuel",
+    "abbreviations": [
+      "2 Sam",
+      "2Sam",
+      "2 Sa",
+      "2Sa",
+      "2S",
+      "II Sam",
+      "II Sa"
+    ],
+    "hindi_name": "2 शमूएल",
+    "roman_aliases": [
+      "2 samuel",
+      "doosra samuel",
+      "dusra samuel",
+      "2 shamuel",
+      "doosra shamuel"
+    ],
+    "chapter_count": 24
+  },
+  {
+    "id": "1KI",
+    "name": "1 Kings",
+    "abbreviations": [
+      "1 Kgs",
+      "1Kgs",
+      "1 Ki",
+      "1Ki",
+      "1K",
+      "I Kgs",
+      "I Ki"
+    ],
+    "hindi_name": "1 राजा",
+    "roman_aliases": [
+      "1 raja",
+      "pehla raja",
+      "1 kings"
+    ],
+    "chapter_count": 22
+  },
+  {
+    "id": "2KI",
+    "name": "2 Kings",
+    "abbreviations": [
+      "2 Kgs",
+      "2Kgs",
+      "2 Ki",
+      "2Ki",
+      "2K",
+      "II Kgs",
+      "II Ki"
+    ],
+    "hindi_name": "2 राजा",
+    "roman_aliases": [
+      "2 raja",
+      "doosra raja",
+      "dusra raja",
+      "2 kings"
+    ],
+    "chapter_count": 25
+  },
+  {
+    "id": "1CH",
+    "name": "1 Chronicles",
+    "abbreviations": [
+      "1 Chron",
+      "1Chr",
+      "1 Ch",
+      "1Ch",
+      "I Chron"
+    ],
+    "hindi_name": "1 इतिहास",
+    "roman_aliases": [
+      "1 itihas",
+      "pehla itihas",
+      "1 chronicles"
+    ],
+    "chapter_count": 29
+  },
+  {
+    "id": "2CH",
+    "name": "2 Chronicles",
+    "abbreviations": [
+      "2 Chron",
+      "2Chr",
+      "2 Ch",
+      "2Ch",
+      "II Chron"
+    ],
+    "hindi_name": "2 इतिहास",
+    "roman_aliases": [
+      "2 itihas",
+      "doosra itihas",
+      "dusra itihas",
+      "2 chronicles"
+    ],
+    "chapter_count": 36
+  },
+  {
+    "id": "EZR",
+    "name": "Ezra",
+    "abbreviations": [
+      "Ezr"
+    ],
+    "hindi_name": "एज्रा",
+    "roman_aliases": [
+      "ezra",
+      "ejra"
+    ],
+    "chapter_count": 10
+  },
+  {
+    "id": "NEH",
+    "name": "Nehemiah",
+    "abbreviations": [
+      "Neh",
+      "Ne"
+    ],
+    "hindi_name": "नहेमायाह",
+    "roman_aliases": [
+      "nehemiah",
+      "nehemyah",
+      "nehemaya"
+    ],
+    "chapter_count": 13
+  },
+  {
+    "id": "EST",
+    "name": "Esther",
+    "abbreviations": [
+      "Esth",
+      "Est",
+      "Es"
+    ],
+    "hindi_name": "एस्तेर",
+    "roman_aliases": [
+      "esther",
+      "ester"
+    ],
+    "chapter_count": 10
+  },
+  {
+    "id": "JOB",
+    "name": "Job",
+    "abbreviations": [
+      "Jb"
+    ],
+    "hindi_name": "अय्यूब",
+    "roman_aliases": [
+      "ayyoob",
+      "ayyub",
+      "ayub",
+      "job"
+    ],
+    "chapter_count": 42
+  },
+  {
+    "id": "PSA",
+    "name": "Psalms",
+    "abbreviations": [
+      "Psalm",
+      "Psa",
+      "Psm",
+      "Pss",
+      "Ps"
+    ],
+    "hindi_name": "भजन संहिता",
+    "roman_aliases": [
+      "bhajan samhita",
+      "bhajan",
+      "bhajan sahita",
+      "psalms",
+      "psalm"
+    ],
+    "chapter_count": 150
+  },
+  {
+    "id": "PRO",
+    "name": "Proverbs",
+    "abbreviations": [
+      "Prov",
+      "Pro",
+      "Prv",
+      "Pr"
+    ],
+    "hindi_name": "नीतिवचन",
+    "roman_aliases": [
+      "neetivachan",
+      "nitivachan",
+      "proverbs"
+    ],
+    "chapter_count": 31
+  },
+  {
+    "id": "ECC",
+    "name": "Ecclesiastes",
+    "abbreviations": [
+      "Eccles",
+      "Ecc",
+      "Ec"
+    ],
+    "hindi_name": "सभोपदेशक",
+    "roman_aliases": [
+      "sabhopadeshak",
+      "sabhopdeshak",
+      "ecclesiastes"
+    ],
+    "chapter_count": 12
+  },
+  {
+    "id": "SNG",
+    "name": "Song of Solomon",
+    "abbreviations": [
+      "Song",
+      "SOS",
+      "Canticles"
+    ],
+    "hindi_name": "श्रेष्ठगीत",
+    "roman_aliases": [
+      "shreshthagiti",
+      "shreshthgeet",
+      "shreshth git",
+      "song of songs"
+    ],
+    "chapter_count": 8
+  },
+  {
+    "id": "ISA",
+    "name": "Isaiah",
+    "abbreviations": [
+      "Isa",
+      "Is"
+    ],
+    "hindi_name": "यशायाह",
+    "roman_aliases": [
+      "yashayah",
+      "yashaya",
+      "isaiah"
+    ],
+    "chapter_count": 66
+  },
+  {
+    "id": "JER",
+    "name": "Jeremiah",
+    "abbreviations": [
+      "Jer",
+      "Je",
+      "Jr"
+    ],
+    "hindi_name": "यिर्मयाह",
+    "roman_aliases": [
+      "yirmayah",
+      "yirmaya",
+      "jeremiah"
+    ],
+    "chapter_count": 52
+  },
+  {
+    "id": "LAM",
+    "name": "Lamentations",
+    "abbreviations": [
+      "Lam",
+      "La"
+    ],
+    "hindi_name": "विलापगीत",
+    "roman_aliases": [
+      "vilaapgeet",
+      "vilapgit",
+      "lamentations"
+    ],
+    "chapter_count": 5
+  },
+  {
+    "id": "EZK",
+    "name": "Ezekiel",
+    "abbreviations": [
+      "Ezek",
+      "Ezk"
+    ],
+    "hindi_name": "यहेजकेल",
+    "roman_aliases": [
+      "yahezkel",
+      "yehezkel",
+      "ezekiel"
+    ],
+    "chapter_count": 48
+  },
+  {
+    "id": "DAN",
+    "name": "Daniel",
+    "abbreviations": [
+      "Dan",
+      "Da",
+      "Dn"
+    ],
+    "hindi_name": "दानिय्येल",
+    "roman_aliases": [
+      "daniyyel",
+      "daniel",
+      "daniyel"
+    ],
+    "chapter_count": 12
+  },
+  {
+    "id": "HOS",
+    "name": "Hosea",
+    "abbreviations": [
+      "Hos",
+      "Ho"
+    ],
+    "hindi_name": "होशे",
+    "roman_aliases": [
+      "hoshe",
+      "hosea",
+      "hoshay"
+    ],
+    "chapter_count": 14
+  },
+  {
+    "id": "JOL",
+    "name": "Joel",
+    "abbreviations": [
+      "Joel",
+      "Joe",
+      "Jl"
+    ],
+    "hindi_name": "योएल",
+    "roman_aliases": [
+      "yoel",
+      "joel"
+    ],
+    "chapter_count": 3
+  },
+  {
+    "id": "AMO",
+    "name": "Amos",
+    "abbreviations": [
+      "Amos",
+      "Am"
+    ],
+    "hindi_name": "आमोस",
+    "roman_aliases": [
+      "aamos",
+      "amos"
+    ],
+    "chapter_count": 9
+  },
+  {
+    "id": "OBA",
+    "name": "Obadiah",
+    "abbreviations": [
+      "Obad",
+      "Ob"
+    ],
+    "hindi_name": "ओबद्याह",
+    "roman_aliases": [
+      "obadyah",
+      "obadiah"
+    ],
+    "chapter_count": 1
+  },
+  {
+    "id": "JON",
+    "name": "Jonah",
+    "abbreviations": [
+      "Jonah",
+      "Jon",
+      "Jnh"
+    ],
+    "hindi_name": "योना",
+    "roman_aliases": [
+      "yona",
+      "jonah"
+    ],
+    "chapter_count": 4
+  },
+  {
+    "id": "MIC",
+    "name": "Micah",
+    "abbreviations": [
+      "Mic",
+      "Mc"
+    ],
+    "hindi_name": "मीका",
+    "roman_aliases": [
+      "meeka",
+      "mika",
+      "micah"
+    ],
+    "chapter_count": 7
+  },
+  {
+    "id": "NAM",
+    "name": "Nahum",
+    "abbreviations": [
+      "Nah",
+      "Na"
+    ],
+    "hindi_name": "नहूम",
+    "roman_aliases": [
+      "nahoom",
+      "nahum"
+    ],
+    "chapter_count": 3
+  },
+  {
+    "id": "HAB",
+    "name": "Habakkuk",
+    "abbreviations": [
+      "Hab",
+      "Hb"
+    ],
+    "hindi_name": "हबक्कूक",
+    "roman_aliases": [
+      "habakkook",
+      "habakkuk"
+    ],
+    "chapter_count": 3
+  },
+  {
+    "id": "ZEP",
+    "name": "Zephaniah",
+    "abbreviations": [
+      "Zeph",
+      "Zep",
+      "Zp"
+    ],
+    "hindi_name": "सपन्याह",
+    "roman_aliases": [
+      "sapanyah",
+      "zephaniah"
+    ],
+    "chapter_count": 3
+  },
+  {
+    "id": "HAG",
+    "name": "Haggai",
+    "abbreviations": [
+      "Hag",
+      "Hg"
+    ],
+    "hindi_name": "हाग्गै",
+    "roman_aliases": [
+      "haggai",
+      "haggay"
+    ],
+    "chapter_count": 2
+  },
+  {
+    "id": "ZEC",
+    "name": "Zechariah",
+    "abbreviations": [
+      "Zech",
+      "Zec",
+      "Zc"
+    ],
+    "hindi_name": "जकर्याह",
+    "roman_aliases": [
+      "jakaryah",
+      "zakariah",
+      "zechariah",
+      "zakaryah"
+    ],
+    "chapter_count": 14
+  },
+  {
+    "id": "MAL",
+    "name": "Malachi",
+    "abbreviations": [
+      "Mal",
+      "Ml"
+    ],
+    "hindi_name": "मलाकी",
+    "roman_aliases": [
+      "malaki",
+      "malachi"
+    ],
+    "chapter_count": 4
+  },
+  {
+    "id": "MAT",
+    "name": "Matthew",
+    "abbreviations": [
+      "Matt",
+      "Mat",
+      "Mt"
+    ],
+    "hindi_name": "मत्ती",
+    "roman_aliases": [
+      "matti",
+      "matthew"
+    ],
+    "chapter_count": 28
+  },
+  {
+    "id": "MRK",
+    "name": "Mark",
+    "abbreviations": [
+      "Mrk",
+      "Mar",
+      "Mk"
+    ],
+    "hindi_name": "मरकुस",
+    "roman_aliases": [
+      "markus",
+      "mark"
+    ],
+    "chapter_count": 16
+  },
+  {
+    "id": "LUK",
+    "name": "Luke",
+    "abbreviations": [
+      "Luk",
+      "Lk"
+    ],
+    "hindi_name": "लूका",
+    "roman_aliases": [
+      "looka",
+      "luka",
+      "luke"
+    ],
+    "chapter_count": 24
+  },
+  {
+    "id": "JHN",
+    "name": "John",
+    "abbreviations": [
+      "John",
+      "Joh",
+      "Jn",
+      "Jhn"
+    ],
+    "hindi_name": "यूहन्ना",
+    "roman_aliases": [
+      "yuhanna",
+      "yohanna",
+      "john"
+    ],
+    "chapter_count": 21
+  },
+  {
+    "id": "ACT",
+    "name": "Acts",
+    "abbreviations": [
+      "Act",
+      "Ac"
+    ],
+    "hindi_name": "प्रेरितों के काम",
+    "roman_aliases": [
+      "preriton ke kaam",
+      "preriton",
+      "acts",
+      "prerit"
+    ],
+    "chapter_count": 28
+  },
+  {
+    "id": "ROM",
+    "name": "Romans",
+    "abbreviations": [
+      "Rom",
+      "Ro",
+      "Rm"
+    ],
+    "hindi_name": "रोमियों",
+    "roman_aliases": [
+      "romiyon",
+      "romiyo",
+      "romans",
+      "romi"
+    ],
+    "chapter_count": 16
+  },
+  {
+    "id": "1CO",
+    "name": "1 Corinthians",
+    "abbreviations": [
+      "1 Cor",
+      "1Cor",
+      "1 Co",
+      "1Co",
+      "I Cor",
+      "I Co"
+    ],
+    "hindi_name": "1 कुरिन्थियों",
+    "roman_aliases": [
+      "1 kurinthiyon",
+      "pehla kurinthiyon",
+      "1 corinthians",
+      "pehla corinthians"
+    ],
+    "chapter_count": 16
+  },
+  {
+    "id": "2CO",
+    "name": "2 Corinthians",
+    "abbreviations": [
+      "2 Cor",
+      "2Cor",
+      "2 Co",
+      "2Co",
+      "II Cor",
+      "II Co"
+    ],
+    "hindi_name": "2 कुरिन्थियों",
+    "roman_aliases": [
+      "2 kurinthiyon",
+      "doosra kurinthiyon",
+      "dusra kurinthiyon",
+      "2 corinthians"
+    ],
+    "chapter_count": 13
+  },
+  {
+    "id": "GAL",
+    "name": "Galatians",
+    "abbreviations": [
+      "Gal",
+      "Ga"
+    ],
+    "hindi_name": "गलतियों",
+    "roman_aliases": [
+      "galatiyon",
+      "galatiyo",
+      "galatians",
+      "galati"
+    ],
+    "chapter_count": 6
+  },
+  {
+    "id": "EPH",
+    "name": "Ephesians",
+    "abbreviations": [
+      "Eph",
+      "Ep"
+    ],
+    "hindi_name": "इफिसियों",
+    "roman_aliases": [
+      "ifisiyon",
+      "ifisiyo",
+      "ephesians",
+      "efisiyo",
+      "efisi"
+    ],
+    "chapter_count": 6
+  },
+  {
+    "id": "PHP",
+    "name": "Philippians",
+    "abbreviations": [
+      "Phil",
+      "Php",
+      "Pp"
+    ],
+    "hindi_name": "फिलिप्पियों",
+    "roman_aliases": [
+      "filippiyon",
+      "filippiyo",
+      "philippians",
+      "philipiyo"
+    ],
+    "chapter_count": 4
+  },
+  {
+    "id": "COL",
+    "name": "Colossians",
+    "abbreviations": [
+      "Col",
+      "Co"
+    ],
+    "hindi_name": "कुलुस्सियों",
+    "roman_aliases": [
+      "kulussiyon",
+      "kulussiyo",
+      "colossians"
+    ],
+    "chapter_count": 4
+  },
+  {
+    "id": "1TH",
+    "name": "1 Thessalonians",
+    "abbreviations": [
+      "1 Thess",
+      "1Thess",
+      "1 Th",
+      "1Th",
+      "I Thess"
+    ],
+    "hindi_name": "1 थिस्सलुनीकियों",
+    "roman_aliases": [
+      "1 thissaluneekiyon",
+      "pehla thissaluniki",
+      "1 thessalonians"
+    ],
+    "chapter_count": 5
+  },
+  {
+    "id": "2TH",
+    "name": "2 Thessalonians",
+    "abbreviations": [
+      "2 Thess",
+      "2Thess",
+      "2 Th",
+      "2Th",
+      "II Thess"
+    ],
+    "hindi_name": "2 थिस्सलुनीकियों",
+    "roman_aliases": [
+      "2 thissaluneekiyon",
+      "doosra thissaluniki",
+      "2 thessalonians"
+    ],
+    "chapter_count": 3
+  },
+  {
+    "id": "1TI",
+    "name": "1 Timothy",
+    "abbreviations": [
+      "1 Tim",
+      "1Tim",
+      "1 Ti",
+      "1Ti",
+      "I Tim"
+    ],
+    "hindi_name": "1 तीमुथियुस",
+    "roman_aliases": [
+      "1 teemuthiyus",
+      "pehla timothy",
+      "1 timothy",
+      "pehla timuthiyus"
+    ],
+    "chapter_count": 6
+  },
+  {
+    "id": "2TI",
+    "name": "2 Timothy",
+    "abbreviations": [
+      "2 Tim",
+      "2Tim",
+      "2 Ti",
+      "2Ti",
+      "II Tim"
+    ],
+    "hindi_name": "2 तीमुथियुस",
+    "roman_aliases": [
+      "2 teemuthiyus",
+      "doosra timothy",
+      "2 timothy",
+      "dusra timuthiyus"
+    ],
+    "chapter_count": 4
+  },
+  {
+    "id": "TIT",
+    "name": "Titus",
+    "abbreviations": [
+      "Tit",
+      "Ti"
+    ],
+    "hindi_name": "तीतुस",
+    "roman_aliases": [
+      "teetus",
+      "titus"
+    ],
+    "chapter_count": 3
+  },
+  {
+    "id": "PHM",
+    "name": "Philemon",
+    "abbreviations": [
+      "Phlm",
+      "Phm",
+      "Pm"
+    ],
+    "hindi_name": "फिलेमोन",
+    "roman_aliases": [
+      "filemon",
+      "philemon"
+    ],
+    "chapter_count": 1
+  },
+  {
+    "id": "HEB",
+    "name": "Hebrews",
+    "abbreviations": [
+      "Heb",
+      "He"
+    ],
+    "hindi_name": "इब्रानियों",
+    "roman_aliases": [
+      "ibraniyon",
+      "ibraniyo",
+      "hebrews",
+      "ibrani"
+    ],
+    "chapter_count": 13
+  },
+  {
+    "id": "JAS",
+    "name": "James",
+    "abbreviations": [
+      "Jas",
+      "Jm"
+    ],
+    "hindi_name": "याकूब",
+    "roman_aliases": [
+      "yakoob",
+      "yakub",
+      "james"
+    ],
+    "chapter_count": 5
+  },
+  {
+    "id": "1PE",
+    "name": "1 Peter",
+    "abbreviations": [
+      "1 Pet",
+      "1Pet",
+      "1 Pe",
+      "1Pe",
+      "1P",
+      "I Pet"
+    ],
+    "hindi_name": "1 पतरस",
+    "roman_aliases": [
+      "1 patras",
+      "pehla patras",
+      "1 peter",
+      "pehla peter"
+    ],
+    "chapter_count": 5
+  },
+  {
+    "id": "2PE",
+    "name": "2 Peter",
+    "abbreviations": [
+      "2 Pet",
+      "2Pet",
+      "2 Pe",
+      "2Pe",
+      "2P",
+      "II Pet"
+    ],
+    "hindi_name": "2 पतरस",
+    "roman_aliases": [
+      "2 patras",
+      "doosra patras",
+      "2 peter",
+      "dusra peter"
+    ],
+    "chapter_count": 3
+  },
+  {
+    "id": "1JN",
+    "name": "1 John",
+    "abbreviations": [
+      "1 John",
+      "1Joh",
+      "1Jn",
+      "1J",
+      "I John",
+      "I Jn"
+    ],
+    "hindi_name": "1 यूहन्ना",
+    "roman_aliases": [
+      "1 yuhanna",
+      "pehla yuhanna",
+      "1 john",
+      "pehla john"
+    ],
+    "chapter_count": 5
+  },
+  {
+    "id": "2JN",
+    "name": "2 John",
+    "abbreviations": [
+      "2 John",
+      "2Joh",
+      "2Jn",
+      "2J",
+      "II John",
+      "II Jn"
+    ],
+    "hindi_name": "2 यूहन्ना",
+    "roman_aliases": [
+      "2 yuhanna",
+      "doosra yuhanna",
+      "2 john",
+      "dusra john"
+    ],
+    "chapter_count": 1
+  },
+  {
+    "id": "3JN",
+    "name": "3 John",
+    "abbreviations": [
+      "3 John",
+      "3Joh",
+      "3Jn",
+      "3J",
+      "III John",
+      "III Jn"
+    ],
+    "hindi_name": "3 यूहन्ना",
+    "roman_aliases": [
+      "3 yuhanna",
+      "teesra yuhanna",
+      "3 john",
+      "tisra john"
+    ],
+    "chapter_count": 1
+  },
+  {
+    "id": "JUD",
+    "name": "Jude",
+    "abbreviations": [
+      "Jude",
+      "Jud",
+      "Jd"
+    ],
+    "hindi_name": "यहूदा",
+    "roman_aliases": [
+      "yahooda",
+      "yahuda",
+      "jude"
+    ],
+    "chapter_count": 1
+  },
+  {
+    "id": "REV",
+    "name": "Revelation",
+    "abbreviations": [
+      "Rev",
+      "Re",
+      "Rv"
+    ],
+    "hindi_name": "प्रकाशितवाक्य",
+    "roman_aliases": [
+      "prakashitvakya",
+      "prakashit vakya",
+      "prakashit",
+      "revelation"
+    ],
+    "chapter_count": 22
+  }
+]
