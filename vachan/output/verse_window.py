@@ -26,13 +26,13 @@ from vachan.core.models import BibleReference
 
 THEMES = {
     "Midnight": {
-        "bg_window": "rgba(10, 12, 18, 0.95)",
-        "card_bg": "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1E202E, stop:1 #141622)",
-        "card_border": "#31344B",
-        "verse_text": "#F5F5FA",
-        "hindi_text": "#E0E2EC",
-        "ref_text": "#E5A93C",  # Warm gold accent
-        "divider": "rgba(229, 169, 60, 0.4)",
+        "bg_window": "rgba(8, 10, 16, 0.95)",
+        "card_bg": "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1F2233, stop:1 #131522)",
+        "card_border": "#3A3E5B",
+        "verse_text": "#FFFFFF",
+        "hindi_text": "#F0F2FA",
+        "ref_text": "#F3B748",  # Vibrant warm gold accent
+        "divider": "rgba(243, 183, 72, 0.6)",
     },
     "Royal Blue": {
         "bg_window": "rgba(6, 14, 28, 0.95)",
