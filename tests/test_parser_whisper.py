@@ -169,3 +169,15 @@ def test_abbreviations_only_when_typed(parser, text, expected):
 
 def test_version_detected(parser):
     assert parser.parse("Ephesians 6:10 in the ESV").reference.version == "ESV"
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("यूहन्ना, तीन अध्याय, सुलह पद.", "John 3:16"),  # real (small, CPU)
+        ("रोमेंस के आत अध्याय में, 28 पद देखेंगे.", "Romans 8:28"),  # real (small, CPU)
+        ("Romans 8, verse 28.", "Romans 8:28"),  # real (small, CPU)
+    ],
+)
+def test_observed_mishearings(parser, text, expected):
+    assert fmt(parser.parse(text)) == expected

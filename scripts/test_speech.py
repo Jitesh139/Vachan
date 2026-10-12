@@ -1,194 +1,197 @@
-"""Test speech transcription, parsing, and Bible retrieval end-to-end.
+"""End-to-end check: audio -> Whisper transcript -> parsed reference -> verse text.
 
-Usage:
-    # 1. Generate/test synthesized speech (English and Hindi):
-    python scripts/test_speech.py --synth "Turn to John chapter 3 verse 16" --lang en
-    python scripts/test_speech.py --synth "यूहन्ना 3 अध्याय 16 पद" --lang hi
-
-    # 2. Test an existing WAV file:
-    python scripts/test_speech.py --wav path/to/audio.wav
-
-    # 3. Live record 5-10 seconds from mic:
-    python scripts/test_speech.py --record 8
+    python scripts/test_speech.py                 # synthesized sample phrases (needs internet once)
+    python scripts/test_speech.py --realtime      # same, streamed through the live pipeline + latency
+    python scripts/test_speech.py --wav my.wav    # your own recording(s)
+    python scripts/test_speech.py --mic 8         # record 8 s from the selected input
+    python scripts/test_speech.py --list-devices
+Options: --device cpu|cuda|auto, --model NAME (overrides the GPU/CPU default).
 """
 
+from __future__ import annotations
+
 import argparse
+import io
 import sys
-import tempfile
 import time
+import wave
 from pathlib import Path
+
 import numpy as np
 
-# Ensure stdout handles UTF-8 (especially for Hindi on Windows console)
-if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# Add repo root to path
-repo_root = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(repo_root))
+from vachan.audio.source import FileAudioSource, LiveAudioSource, list_input_devices  # noqa: E402
+from vachan.bible.provider import LocalSqliteBibleProvider  # noqa: E402
+from vachan.core.models import BibleReference  # noqa: E402
+from vachan.core.paths import APP_DIR  # noqa: E402
+from vachan.core.pipeline import PipelineEvents, PipelineWorker  # noqa: E402
+from vachan.core.settings import Settings  # noqa: E402
+from vachan.parser import ReferenceParser  # noqa: E402
+from vachan.stt.transcriber import WhisperTranscriber  # noqa: E402
 
-from vachan.bible.provider import LocalSqliteBibleProvider
-from vachan.parser.parser import ReferenceParser
-from vachan.stt.transcriber import WhisperTranscriber
+JOHN_3_16 = BibleReference("JHN", "John", 3, 16)
+# (gTTS voice, phrase, expected reference, context for follow-ups)
+SAMPLES = [
+    ("en", "Turn to John chapter three verse sixteen", "John 3:16", None),
+    ("en", "Turn to John chapter 3 verse 16", "John 3:16", None),
+    ("hi", "यूहन्ना तीन अध्याय सोलह पद", "John 3:16", None),
+    ("hi", "यूहन्ना 3 अध्याय 16 पद", "John 3:16", None),
+    ("hi", "Romans ke aath adhyay mein 28 pad dekhenge", "Romans 8:28", None),
+    ("en", "Now look at the next verse", "John 3:17", JOHN_3_16),
+    ("hi", "रोमियों आठ अध्याय अट्ठाईस पद", "Romans 8:28", None),
+    ("en", "Open your Bibles to first Corinthians thirteen four", "1 Corinthians 13:4", None),
+]
+SAMPLE_DIR = APP_DIR / "tmp" / "speech_samples"
 
 
-def synthesize_audio(phrase: str, lang: str = "en") -> np.ndarray:
-    """Generate audio using gTTS and return as 16kHz float32 mono numpy array."""
-    from gtts import gTTS
-    import io
+def synthesize(voice: str, text: str, index: int) -> Path:
+    """gTTS -> 16 kHz mono WAV with 0.5 s lead-in and 2.5 s tail of silence (cached)."""
+    path = SAMPLE_DIR / f"sample_{index}_{voice}.wav"
+    if path.exists():
+        return path
     import miniaudio
+    from gtts import gTTS
     from scipy.signal import resample_poly
-    from math import gcd
 
-    print(f"[*] Synthesizing speech via gTTS ({lang}): '{phrase}'...")
-    tts = gTTS(text=phrase, lang=lang, slow=False)
-    fp = io.BytesIO()
-    tts.write_to_fp(fp)
-    mp3_bytes = fp.getvalue()
-
-    decoded = miniaudio.decode(mp3_bytes, nchannels=1, output_format=miniaudio.SampleFormat.FLOAT32)
-    sample_rate = decoded.sample_rate
-    data = np.array(decoded.samples, dtype=np.float32)
-
-    if sample_rate != 16000:
-        up = 16000 // gcd(16000, sample_rate)
-        down = sample_rate // gcd(16000, sample_rate)
-        data = resample_poly(data, up, down).astype(np.float32)
-
-    return data
-
-    return data
+    buf = io.BytesIO()
+    gTTS(text=text, lang=voice).write_to_fp(buf)
+    dec = miniaudio.decode(buf.getvalue(), nchannels=1, output_format=miniaudio.SampleFormat.FLOAT32)
+    audio = resample_poly(np.array(dec.samples, np.float32), 16000, dec.sample_rate)
+    audio = np.concatenate([np.zeros(8000), audio, np.zeros(40000)])
+    write_wav(path, audio)
+    return path
 
 
-def record_microphone(duration_sec: float = 7.0, device: int = None) -> np.ndarray:
-    """Record audio from the microphone and return 16kHz float32 mono."""
-    import sounddevice as sd
+def write_wav(path: Path, audio: np.ndarray) -> None:
+    """Save 16 kHz mono float audio as 16-bit PCM."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes((np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes())
+
+
+def read_wav(path: Path) -> np.ndarray:
+    """Load a WAV file as 16 kHz mono float32."""
+    src = FileAudioSource(path, loop=False)
     from scipy.signal import resample_poly
-    from math import gcd
 
-    target_sr = 16000
-    native_sr = 16000
+    sr = src._file_sr
+    return src._audio if sr == 16000 else resample_poly(src._audio, 16000, sr).astype(np.float32)
 
-    if device is not None:
-        dev_info = sd.query_devices(device, "input")
-        native_sr = int(dev_info["default_samplerate"])
+
+def run_direct(worker: PipelineWorker, audio: np.ndarray, expected: str | None) -> bool:
+    """Whole clip through Whisper, then the pipeline's own parse + lookup code."""
+    t = worker.transcriber.transcribe(audio)
+    print(f"  transcript ({t.language}, {t.seconds:.2f}s): {t.text!r}")
+    worker._state.texts.clear()
+    line, suggestion = worker._handle_text(t.text)
+    return report(line, suggestion, expected)
+
+
+def run_realtime(worker: PipelineWorker, path: Path, expected: str | None) -> bool:
+    """Stream the file in real time through the live pipeline and time the suggestion."""
+    got: list = []
+    worker.events = PipelineEvents(
+        suggestion=lambda s: got.append((time.monotonic(), s)),
+        transcript=lambda text, lang: print(f"  transcript ({lang}): {text!r}"),
+        error=lambda e: print(f"  ERROR: {e}"),
+    )
+    worker.audio = FileAudioSource(path, loop=False)
+    speech_end = len(read_wav(path)) / 16000 - 2.5  # tail silence added by synthesize()
+    start = time.monotonic()
+    worker.start()
+    while not got and time.monotonic() - start < speech_end + 15:
+        time.sleep(0.05)
+    worker.stop(wait=5)
+    if not got:
+        return report("no suggestion within timeout", None, expected)
+    latency = got[0][0] - start - speech_end
+    print(f"  latency after end of speech: {latency:.2f}s")
+    return report("MATCH", got[0][1], expected)
+
+
+def report(line: str, suggestion, expected: str | None) -> bool:
+    """Print transcript -> reference -> verse and return pass/fail."""
+    if suggestion is None:
+        print(f"  parser: {line}")
+        ok = expected is None
     else:
-        try:
-            sd.check_input_settings(samplerate=16000, channels=1)
-            native_sr = 16000
-        except Exception:
-            dev_info = sd.query_devices(kind="input")
-            native_sr = int(dev_info["default_samplerate"])
-
-    channels = 1
-    print(f"[*] Recording for {duration_sec}s from mic (Native SR: {native_sr}Hz)... Speak now!")
-    audio = sd.rec(int(duration_sec * native_sr), samplerate=native_sr, channels=channels, dtype="float32", device=device)
-    sd.wait()
-    print("[*] Recording complete.")
-
-    audio = audio.flatten()
-    if native_sr != target_sr:
-        up = target_sr // gcd(target_sr, native_sr)
-        down = native_sr // gcd(target_sr, native_sr)
-        audio = resample_poly(audio, up, down).astype(np.float32)
-
-    return audio
+        ref = suggestion.reference.format_reference()
+        print(f"  reference: {ref}  (confidence {suggestion.result.confidence:.2f})")
+        print(f"  verse [{suggestion.primary.version}]: {suggestion.primary.text[:110]}")
+        if suggestion.secondary:
+            print(f"  verse [{suggestion.secondary.version}]: {suggestion.secondary.text[:110]}")
+        ok = expected is None or ref == expected
+    if expected:
+        print(f"  {'PASS' if ok else 'FAIL'} (expected {expected})")
+    return ok
 
 
-def run_test(audio_16k: np.ndarray, model_size: str = "base"):
-    """Run Whisper STT -> Reference Parser -> Bible Verse retrieval."""
-    print("=" * 60)
-    print(f"[*] Initializing WhisperTranscriber (model={model_size})...")
-    transcriber = WhisperTranscriber(model_size=model_size)
-    parser = ReferenceParser()
-    bible = LocalSqliteBibleProvider()
+def main() -> int:
+    """CLI entry point."""
+    sys.stdout.reconfigure(encoding="utf-8")
+    ap = argparse.ArgumentParser(description="Speech -> verse end-to-end test")
+    ap.add_argument("--wav", nargs="+", type=Path)
+    ap.add_argument("--mic", type=float, metavar="SECONDS")
+    ap.add_argument("--realtime", action="store_true")
+    ap.add_argument("--list-devices", action="store_true")
+    ap.add_argument("--device", default=None, choices=["auto", "cpu", "cuda"])
+    ap.add_argument("--model", default=None)
+    args = ap.parse_args()
 
-    print("[*] Running Whisper transcription...")
-    t0 = time.time()
-    raw_text, detected_lang = transcriber.transcribe_with_info(audio_16k)
-    duration = time.time() - t0
+    if args.list_devices:
+        for d in list_input_devices():
+            print(f"{'*' if d['is_default'] else ' '} [{d['index']}] {d['name']}")
+        return 0
 
-    print(f"[-] STT Time taken: {duration:.2f}s")
-    print(f"[-] Raw Whisper text: '{raw_text}'")
-    print(f"[-] Detected Language: '{detected_lang}'")
+    settings = Settings.load()
+    if args.device:
+        settings.device = args.device
+    if args.model:
+        settings.model_gpu = settings.model_cpu = args.model
+    stt = WhisperTranscriber(settings)
+    stt.load(lambda msg: print(f"[stt] {msg}"))
+    if stt.fallback_reason:
+        print(f"[stt] note: {stt.fallback_reason}")
+    worker = PipelineWorker(
+        LiveAudioSource(settings.input_device), stt, ReferenceParser(),
+        LocalSqliteBibleProvider(), settings,
+    )  # fmt: skip
 
-    if not raw_text.strip():
-        print("[!] No speech recognized.")
-        return
-
-    print("\n[*] Parsing reference from text...")
-    parse_result = parser.parse(raw_text)
-
-    if parse_result and parse_result.reference:
-        verse_ref = parse_result.reference
-        print(f"[+] PARSED REFERENCE DETECTED: {verse_ref.book_id} {verse_ref.chapter}:{verse_ref.verse_start}"
-              + (f"-{verse_ref.verse_end}" if verse_ref.verse_end else ""))
-        print(f"    Confidence: {parse_result.confidence:.2f}")
-        print(f"    Original matched text: '{parse_result.raw_match}'")
-
-        # Determine version based on language or Devanagari characters in transcript
-        is_hindi = detected_lang == "hi" or any('\u0900' <= char <= '\u097F' for char in raw_text)
-        version = "HIN_IRV" if is_hindi else "KJV"
-        verse_text = bible.get_verse_text(
-            verse_ref.book_id,
-            verse_ref.chapter,
-            verse_ref.verse_start,
-            verse_ref.verse_end,
-            version=version,
-        )
-
-        print(f"\n[+] BIBLE VERSE RETRIEVED ({version}):")
-        if verse_text:
-            print(f"    \"{verse_text}\"")
-        else:
-            print("    [!] Verse not found in database.")
-    else:
-        print("[-] PARSER RESULT: No match found.")
-
-    print("=" * 60)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="End-to-end Speech to Bible Verse test.")
-    parser.add_argument("--synth", type=str, help="Text phrase to synthesize via gTTS and test")
-    parser.add_argument("--lang", type=str, default="en", help="Language for synthesis (en or hi)")
-    parser.add_argument("--wav", type=str, help="Path to WAV audio file to test")
-    parser.add_argument("--record", type=float, help="Record N seconds from mic")
-    parser.add_argument("--device", type=int, default=None, help="Input device ID for recording")
-    parser.add_argument("--model", type=str, default="base", help="Whisper model size (tiny, base, small, large-v3)")
-
-    args = parser.parse_args()
-
-    if args.synth:
-        audio = synthesize_audio(args.synth, lang=args.lang)
+    cases: list[tuple[str, Path | np.ndarray, str | None, BibleReference | None]] = []
+    if args.mic:
+        src = worker.audio
+        src.start()
+        print(f"Recording {args.mic:.0f}s from {src.device_name} - speak now...")
+        time.sleep(args.mic)
+        audio = src.read_latest(args.mic)
+        src.stop()
+        path = APP_DIR / "tmp" / "mic_recording.wav"
+        write_wav(path, audio)
+        print(f"saved {path} (RMS {float(np.sqrt(np.mean(audio**2))):.4f})")
+        cases.append(("microphone", path, None, None))
     elif args.wav:
-        import soundfile as sf
-        audio, sr = sf.read(args.wav, dtype="float32")
-        if audio.ndim > 1:
-            audio = np.mean(audio, axis=1)
-        if sr != 16000:
-            from scipy.signal import resample_poly
-            from math import gcd
-            up = 16000 // gcd(16000, sr)
-            down = sr // gcd(16000, sr)
-            audio = resample_poly(audio, up, down).astype(np.float32)
-    elif args.record:
-        audio = record_microphone(duration_sec=args.record, device=args.device)
+        cases += [(str(p), p, None, None) for p in args.wav]
     else:
-        # Default self-test: test English and Hindi synthesized samples
-        print("[*] Running standard end-to-end self-test on John 3:16 (English & Hindi)...")
-        en_audio = synthesize_audio("Turn to John chapter 3 verse 16", lang="en")
-        run_test(en_audio, model_size=args.model)
+        for i, (voice, text, expected, ctx) in enumerate(SAMPLES):
+            cases.append((text, synthesize(voice, text, i), expected, ctx))
 
-        hi_audio = synthesize_audio("यूहन्ना 3 अध्याय 16 पद", lang="hi")
-        run_test(hi_audio, model_size=args.model)
-        return
-
-    run_test(audio, model_size=args.model)
+    passed = 0
+    for label, path, expected, ctx in cases:
+        print(f"\n=== {label}")
+        worker._state = type(worker._state)()  # fresh buffers/cooldowns per case
+        worker.set_context(ctx)
+        if args.realtime:
+            ok = run_realtime(worker, path, expected)
+        else:
+            ok = run_direct(worker, read_wav(path), expected)
+        passed += ok
+    print(f"\n{passed}/{len(cases)} passed  (Whisper {stt.model_name} on {stt.device.upper()})")
+    return 0 if passed == len(cases) else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

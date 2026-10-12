@@ -235,7 +235,7 @@ class PipelineWorker:
             context = st.context
         result = self.parser.parse(self._parse_text(), context_reference=context)
         if result is None:
-            return "no match: no Bible book name recognised", None
+            return "no match: no book name followed by chapter/verse numbers", None
         if not result.is_valid:
             return f"no match: '{result.raw_match}' is not a real chapter/verse", None
         ref = result.reference

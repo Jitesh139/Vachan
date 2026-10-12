@@ -33,6 +33,8 @@ HINDI_ORDINALS = {
     "तीसरा": 3, "तीसरी": 3, "तीसरे": 3, "चौथा": 4, "चौथी": 4, "चौथे": 4,
     "छठा": 6, "छठी": 6, "छठे": 6,
 }  # fmt: skip
+# Observed Whisper mishearings of Hindi numbers (only read inside book/chapter/verse structure)
+MISHEARD_NUMBERS = {"सुलह": 16, "सोला": 16, "sola": 16, "आत": 8, "अठाईस": 28, "अट्ठाइस": 28}
 # Romanized Hindi number words that are also everyday English/Hinglish words
 AMBIGUOUS_NUMBER_WORDS = {"do", "no", "to", "so"}
 
@@ -66,6 +68,7 @@ class NumberNormalizer:
         raw: dict[str, int] = json.loads(path.read_text(encoding="utf-8"))
         self.hindi = {fold(k): v for k, v in raw.items() if k not in AMBIGUOUS_NUMBER_WORDS}
         self.hindi.update(HINDI_ORDINALS)
+        self.hindi.update({fold(k): v for k, v in MISHEARD_NUMBERS.items()})
         self._fixes = [(re.compile(p), r) for p, r in SPELLING_FIXES]
 
     def normalize(self, text: str) -> str:

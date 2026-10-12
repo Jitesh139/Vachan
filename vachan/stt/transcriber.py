@@ -103,7 +103,8 @@ class WhisperTranscriber:
         path = self._ensure_downloaded(name, progress)
         progress(f"Loading Whisper '{name}' on {device.upper()} ({compute})...")
         t0 = time.perf_counter()
-        threads = max(1, (os.cpu_count() or 4) // 2)
+        # more threads is slower on hybrid P/E-core CPUs (measured: 11 threads 2.5x slower than 8)
+        threads = min(8, max(1, (os.cpu_count() or 4) // 2))
         model = WhisperModel(path, device=device, compute_type=compute, cpu_threads=threads)
         # warm-up: forces cuBLAS/cuDNN to load now, so failures trigger the CPU fallback
         segments, _ = model.transcribe(np.zeros(16000, np.float32), language="en")
