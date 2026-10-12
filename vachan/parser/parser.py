@@ -1,75 +1,86 @@
-"""Bible reference parser implementing fast rule-based extraction.
+"""Rule-based Bible reference parser for English, Hindi (Devanagari) and Hinglish.
 
-Supports:
-- English: 'John 3:16', 'John chapter three verse sixteen', 'turn to Romans 8', 'verses 5 to 9'
-- Hindi: 'यूहन्ना 3:16', 'यूहन्ना तीन अध्याय सोलह पद', 'रोमियों 8 अध्याय 28 पद'
-- Hinglish: 'Romans ke aath adhyay mein', 'Yuhanna teen solah'
-- Follow-ups: 'next verse', 'previous verse', 'verse 17' relative to context
-- Version detection: ESV, NIV, KJV, NLT, NKJV, NASB, ASV, WEB, BSI, IRV
-- Confidence scoring and reason breakdown
+Pipeline: normalize -> tokenize -> find book aliases (exact, then fuzzy) -> read a
+structured chapter/verse sequence after each book -> add follow-ups ("next verse",
+"verse 17") relative to the last shown reference -> return the LAST valid reference
+in the text (the rolling transcript buffer ends with the newest speech).
 """
 
+from __future__ import annotations
+
 import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
 from rapidfuzz import fuzz, process
 
 from vachan.core.models import BibleReference, ParseResult
+from vachan.core.paths import DATA_DIR
 from vachan.parser.normalizer import NumberNormalizer
 from vachan.parser.validator import CanonValidator
 
-
-KNOWN_VERSIONS = {
-    "esv": "ESV",
-    "niv": "NIV",
-    "kjv": "KJV",
-    "nlt": "NLT",
-    "nkjv": "NKJV",
-    "nasb": "NASB",
-    "asv": "ASV",
-    "web": "WEB",
-    "bsi": "BSI",
-    "irv": "IRV",
-    "hindi": "IRV",
+CHAPTER_CUES = {"chapter", "chapters", "adhyay", "adhyaya", "अध्याय"}
+VERSE_CUES = {"verse", "verses", "pad", "aayat", "ayat", "पद", "आयत", "वचन"}
+# Words allowed between a book name and its numbers ("Romans ke aath adhyay mein 28 pad")
+FILLERS = CHAPTER_CUES | VERSE_CUES | {
+    "of", "the", "in", "number", "ke", "ka", "ki", "mein", "me", "se",
+    "के", "का", "की", "में", "मे", "को", ":",
+}  # fmt: skip
+RANGE_SEPS = {"-", "to", "through", "thru", "till", "until", "and", "se", "से", "और"}
+# Words that make it likely a preacher is citing scripture
+CUE_WORDS = CHAPTER_CUES | VERSE_CUES | {
+    "turn", "open", "read", "reading", "bible", "bibles", "scripture", "book", "says",
+    "written", "dekhenge", "padhenge", "padhiye", "kholiye", "nikaliye", "nikalenge",
+    "बाइबल", "बाइबिल", "पढ़ें", "पढ़िए", "पढ़ेंगे", "पढते", "देखें", "देखिए", "देखेंगे",
+    "निकालिए", "निकालें", "निकालेंगे", "खोलिए", "खोलें", "लिखा", "पुस्तक", "वचन",
+}  # fmt: skip
+NEXT_PHRASES = {("next", "verse"), ("agla", "pad"), ("agli", "aayat"), ("अगला", "पद"),
+                ("अगली", "आयत"), ("अगला", "वचन"), ("following", "verse")}  # fmt: skip
+PREV_PHRASES = {("previous", "verse"), ("pichla", "pad"), ("pichhla", "pad"),
+                ("previous", "पद"), ("previous", "आयत"), ("previous", "वचन")}  # fmt: skip
+# Book names that are also everyday words / names - need a cue word to be trusted
+COMMON_WORD_BOOKS = {"mark", "job", "acts", "numbers", "james", "ruth", "jude", "amos",
+                     "john", "song", "जॉब", "मार्क", "जॉन", "नंबर्स", "जेम्स"}  # fmt: skip
+NUMBER_PREFIXES = {
+    1: ["1", "first", "pehla", "pahla", "pehli", "पहला", "पहली", "पहले", "प्रथम"],
+    2: ["2", "second", "doosra", "dusra", "doosri", "दूसरा", "दूसरी", "दूसरे", "द्वितीय"],
+    3: ["3", "third", "teesra", "tisra", "teesri", "तीसरा", "तीसरी", "तीसरे", "तृतीय"],
 }
-
-# Cue phrases indicating scripture citations
-CUE_PATTERNS = [
-    r"\bturn to\b",
-    r"\bopen to\b",
-    r"\bread from\b",
-    r"\bbook of\b",
-    r"\bchapter\b",
-    r"\bverse\b",
-    r"\bverses\b",
-    r"अध्याय",
-    r"पद",
-    r"आयत",
-    r"पढ़िए",
-    r"पढ़ें",
-    r"निकालिए",
-    r"वचन",
-    r"\badhyay\b",
-    r"\bke\s+adhyay\b",
-    r"\bpad\b",
-    r"\baayat\b",
-    r"\bmein\b",
-]
+TYPED_ONLY_EXTRAS = {"PSA": ["bhajan"]}  # spoken "bhajan 23" is usually a hymn number
+SPEECH_EXTRAS = {"MAT": ["mathew"], "REV": ["revelations"], "PSA": ["psalm", "zabur", "zaboor"]}
+KNOWN_VERSIONS = {"esv": "ESV", "niv": "NIV", "kjv": "KJV", "nlt": "NLT", "nkjv": "NKJV",
+                  "nasb": "NASB", "asv": "ASV", "irv": "HIN_IRV"}  # fmt: skip
+FUZZY_CUTOFF = 80.0
 
 
-@dataclass
-class BookAlias:
+@dataclass(frozen=True)
+class _Alias:
     book_id: str
-    canonical_name: str
-    pattern: str
-    is_multi_word: bool
+    name: str
+    typed_only: bool
+    common_word: bool
+
+
+@dataclass(frozen=True)
+class _BookHit:
+    start: int
+    end: int
+    alias: _Alias
+    fuzzy: str = ""  # description when matched fuzzily
+
+
+@dataclass(frozen=True)
+class _Numbers:
+    chapter: int
+    verse: Optional[int]
+    verse_end: Optional[int]
+    end: int  # token index after the numbers
+    chapter_cue: bool
 
 
 class ReferenceParser:
-    """Fast regex and phonetic/alias rule-based Bible citation parser."""
+    """Implements the ReferenceResolver port."""
 
     def __init__(
         self,
@@ -77,536 +88,294 @@ class ReferenceParser:
         verse_counts_path: Optional[Path] = None,
         hindi_numbers_path: Optional[Path] = None,
     ) -> None:
-        base_data = Path(__file__).resolve().parent.parent.parent / "data"
-        if books_path is None:
-            books_path = base_data / "books.json"
-
         self.normalizer = NumberNormalizer(hindi_numbers_path)
         self.validator = CanonValidator(verse_counts_path)
-        self.aliases: List[BookAlias] = []
-        self._fuzzy_alias_dict: Dict[str, BookAlias] = {}
-        self._fuzzy_alias_keys: List[str] = []
-        self._load_books(books_path)
+        self._aliases: dict[tuple[str, ...], _Alias] = {}
+        self._load_books(books_path or DATA_DIR / "books.json")
+        self._max_alias_len = max(len(k) for k in self._aliases)
+        self._fuzzy_keys = {
+            " ".join(k): a for k, a in self._aliases.items() if not a.typed_only and len(" ".join(k)) >= 4
+        }
+
+    # ------------------------------------------------------------------ setup
+    def _key(self, alias: str) -> tuple[str, ...]:
+        return tuple(self.normalizer.tokenize(self.normalizer.normalize(alias)))
+
+    def _add(self, alias: str, book_id: str, name: str, typed_only: bool) -> None:
+        key = self._key(alias)
+        existing = self._aliases.get(key)
+        if not key or (existing and (typed_only or not existing.typed_only)):
+            return
+        common = " ".join(key) in COMMON_WORD_BOOKS
+        self._aliases[key] = _Alias(book_id, name, typed_only, common)
 
     def _load_books(self, path: Path) -> None:
-        """Load books dictionary and build sorted regex alias matchers."""
-        if not path.exists():
-            return
+        books = json.loads(path.read_text(encoding="utf-8"))
+        all_prefixes = {p for ps in NUMBER_PREFIXES.values() for p in ps}
+        for b in books:
+            bid, name = b["id"], b["name"]
+            spoken = [name, b.get("hindi_name", ""), *b.get("roman_aliases", [])]
+            spoken += b.get("spoken_aliases", []) + SPEECH_EXTRAS.get(bid, [])
+            typed = b.get("abbreviations", []) + TYPED_ONLY_EXTRAS.get(bid, [])
+            if bid[0].isdigit():  # numbered book: rebuild every prefix x base-name combo
+                bases = set()
+                for alias in spoken:
+                    words = alias.split()
+                    bases.add(" ".join(words[1:] if words and words[0] in all_prefixes else words))
+                spoken = [f"{p} {base}" for p in NUMBER_PREFIXES[int(bid[0])] for base in bases]
+            for alias in spoken:
+                if alias and alias.lower() not in TYPED_ONLY_EXTRAS.get(bid, []):
+                    self._add(alias, bid, name, typed_only=False)
+            for alias in typed:
+                self._add(alias, bid, name, typed_only=True)
 
-        with open(path, "r", encoding="utf-8") as f:
-            books_data = json.load(f)
-
-        raw_aliases: List[Tuple[str, str, str]] = []  # (alias, book_id, canonical_name)
-
-        for b in books_data:
-            book_id = b["id"]
-            name = b["name"]
-
-            # Canonical English name
-            raw_aliases.append((name.lower(), book_id, name))
-
-            # Numbered book ordinal variations
-            if name.startswith("1 "):
-                base = name[2:].lower()
-                raw_aliases.append((f"first {base}", book_id, name))
-                raw_aliases.append((f"1st {base}", book_id, name))
-                raw_aliases.append((f"pehla {base}", book_id, name))
-            elif name.startswith("2 "):
-                base = name[2:].lower()
-                raw_aliases.append((f"second {base}", book_id, name))
-                raw_aliases.append((f"2nd {base}", book_id, name))
-                raw_aliases.append((f"doosra {base}", book_id, name))
-            elif name.startswith("3 "):
-                base = name[2:].lower()
-                raw_aliases.append((f"third {base}", book_id, name))
-                raw_aliases.append((f"3rd {base}", book_id, name))
-                raw_aliases.append((f"teesra {base}", book_id, name))
-
-            # Common misspellings and church variations
-            if book_id == "PSA":
-                for p_alias in ["zabur", "zaboor", "ज़बूर", "psalms", "psalm", "bhajan samhita", "bhajan"]:
-                    raw_aliases.append((p_alias, book_id, name))
-            elif book_id == "ROM":
-                for r_alias in ["romans", "romiyo", "romiyon", "romi"]:
-                    raw_aliases.append((r_alias, book_id, name))
-            elif book_id == "JHN":
-                for j_alias in ["john", "yuhanna", "yohanna", "yuhana", "yohana"]:
-                    raw_aliases.append((j_alias, book_id, name))
-            elif book_id == "MAT":
-                for m_alias in ["matthew", "mathew", "mati", "matti"]:
-                    raw_aliases.append((m_alias, book_id, name))
-            elif book_id == "REV":
-                for rev_alias in ["revelation", "revelations", "prakashitvakya", "prakashit vakya"]:
-                    raw_aliases.append((rev_alias, book_id, name))
-
-            # Abbreviations
-            for abbr in b.get("abbreviations", []):
-                raw_aliases.append((abbr.lower(), book_id, name))
-
-            # Hindi name (Devanagari)
-            hindi_name = b.get("hindi_name", "")
-            if hindi_name:
-                raw_aliases.append((hindi_name.lower(), book_id, name))
-
-            # Romanized aliases
-            for r in b.get("roman_aliases", []):
-                raw_aliases.append((r.lower(), book_id, name))
-
-        # Deduplicate while preserving order
-        seen_aliases = set()
-        deduped_raw: List[Tuple[str, str, str]] = []
-        for a_text, b_id, c_name in raw_aliases:
-            a_clean = a_text.strip().lower()
-            if a_clean and a_clean not in seen_aliases:
-                seen_aliases.add(a_clean)
-                deduped_raw.append((a_clean, b_id, c_name))
-
-        # Sort by length descending so longer phrases match first (e.g. '1 samuel' before 'samuel')
-        deduped_raw.sort(key=lambda x: len(x[0]), reverse=True)
-
-        for alias_text, book_id, name in deduped_raw:
-            escaped = re.escape(alias_text)
-            is_multi = " " in alias_text
-            alias_obj = BookAlias(
-                book_id=book_id,
-                canonical_name=name,
-                pattern=escaped,
-                is_multi_word=is_multi,
-            )
-            self.aliases.append(alias_obj)
-            self._fuzzy_alias_dict[alias_text] = alias_obj
-
-        # Filter candidate keys for rapidfuzz
-        self._fuzzy_alias_keys = [k for k in self._fuzzy_alias_dict.keys() if len(k) >= 3]
-
-    def detect_version(self, text: str) -> Optional[str]:
-        """Detect any Bible version keyword mentioned in text."""
-        lower = text.lower()
-        for kw, version_code in KNOWN_VERSIONS.items():
-            if re.search(r"\b" + re.escape(kw) + r"\b", lower):
-                return version_code
-        return None
-
-    def _clean_text(self, text: str) -> str:
-        """Pre-clean input text for punctuation, spoken numbers, and Devanagari numerals."""
-        # 1. Normalize quotes and apostrophes
-        text = text.replace("’", "'").replace("‘", "'").replace("`", "'")
-        text = re.sub(r"\b([a-zA-Z]+)'s\b", r"\1s", text)
-        text = re.sub(r"\b([a-zA-Z]+)'\b", r"\1", text)
-
-        # 2. Convert Devanagari numerals
-        text = self.normalizer.convert_devanagari_digits_to_ascii(text)
-
-        # 3. Pre-normalize spoken numbers in text (e.g. "twenty eight" -> "28")
-        text = self.normalizer.normalize_spoken_numbers_in_text(text)
-
-        # 4. Standardize chapter.verse to colon (e.g. "3.16" -> "3:16")
-        text = re.sub(r"\b(\d+)[\.](\d+)\b", r"\1:\2", text)
-
-        return text
-
+    # ------------------------------------------------------------------ public
     def parse(
         self,
         text: str,
         context_reference: Optional[BibleReference] = None,
+        typed: bool = False,
     ) -> Optional[ParseResult]:
-        """Parse raw text snippet and return detected reference with confidence score."""
+        """Return the last reference in `text`, an invalid-reference result, or None.
+
+        `typed=True` (manual search box) also accepts abbreviations like "Jn 3:16"
+        and chapter-only references without cue words.
+        """
         if not text or not text.strip():
             return None
+        tokens = self.normalizer.tokenize(self.normalizer.normalize(text))
+        candidates: list[tuple[int, ParseResult]] = []
+        consumed: set[int] = set()
 
-        cleaned = self._clean_text(text)
-        version = self.detect_version(cleaned)
-
-        # 1. Check for relative follow-up citations ("next verse", "previous verse", "verse 17")
-        follow_up_result = self._check_follow_up(cleaned, context_reference, version)
-        if follow_up_result:
-            return follow_up_result
-
-        # 2. Check for explicit book references
-        return self._find_book_reference(cleaned, version)
-
-    def _check_follow_up(
-        self,
-        text: str,
-        context: Optional[BibleReference],
-        version: Optional[str],
-    ) -> Optional[ParseResult]:
-        """Detect relative updates: 'next verse', 'previous verse', 'verse 17'."""
-        if not context:
-            return None
-
-        lower = text.lower()
-
-        # Check 'next verse' / 'agla pad' / 'agli aayat'
-        next_patterns = [
-            r"\bnext verse\b",
-            r"\bagla pad\b",
-            r"\bagli aayat\b",
-            r"अगला पद",
-            r"अगली आयत",
-        ]
-        for p in next_patterns:
-            m = re.search(p, lower)
-            if m:
-                target_verse = (context.verse_end or context.verse_start) + 1
-                if self.validator.is_valid_reference(context.book_id, context.chapter, target_verse):
-                    ref = BibleReference(
-                        book_id=context.book_id,
-                        book_name=context.book_name,
-                        chapter=context.chapter,
-                        verse_start=target_verse,
-                        version=version or context.version,
-                    )
-                    return ParseResult(
-                        reference=ref,
-                        raw_match=m.group(0),
-                        confidence=0.95,
-                        is_follow_up=True,
-                    )
-
-        # Check 'previous verse' / 'pichhla pad'
-        prev_patterns = [
-            r"\bprevious verse\b",
-            r"\bpichla pad\b",
-            r"\bpichhla pad\b",
-            r"पिछला पद",
-            r"पिछली आयत",
-        ]
-        for p in prev_patterns:
-            m = re.search(p, lower)
-            if m:
-                target_verse = context.verse_start - 1
-                if target_verse >= 1 and self.validator.is_valid_reference(
-                    context.book_id, context.chapter, target_verse
-                ):
-                    ref = BibleReference(
-                        book_id=context.book_id,
-                        book_name=context.book_name,
-                        chapter=context.chapter,
-                        verse_start=target_verse,
-                        version=version or context.version,
-                    )
-                    return ParseResult(
-                        reference=ref,
-                        raw_match=m.group(0),
-                        confidence=0.95,
-                        is_follow_up=True,
-                    )
-
-        # Check single verse update: 'verse 17', 'pad 17', 'verses 5 to 9'
-        verse_update_match = re.search(
-            r"(?:verses?|pad|aayat|पद|आयत)\s+([a-zA-Z0-9\u0900-\u097F]+)(?:\s*(?:to|se|se lekar|तक|-)\s*([a-zA-Z0-9\u0900-\u097F]+))?",
-            lower,
-        )
-        if verse_update_match:
-            v_start_tok = verse_update_match.group(1)
-            v_end_tok = verse_update_match.group(2)
-
-            v_start = self.normalizer.parse_number_token(v_start_tok)
-            v_end = self.normalizer.parse_number_token(v_end_tok) if v_end_tok else None
-
-            if v_start and self.validator.is_valid_reference(context.book_id, context.chapter, v_start, v_end):
-                ref = BibleReference(
-                    book_id=context.book_id,
-                    book_name=context.book_name,
-                    chapter=context.chapter,
-                    verse_start=v_start,
-                    verse_end=v_end,
-                    version=version or context.version,
-                )
-                return ParseResult(
-                    reference=ref,
-                    raw_match=verse_update_match.group(0),
-                    confidence=0.90,
-                    is_follow_up=True,
-                )
-
-        return None
-
-    def _find_book_reference(
-        self,
-        text: str,
-        version: Optional[str],
-    ) -> Optional[ParseResult]:
-        """Scan text for a book mention and extract chapter / verse."""
-        lower = text.lower()
-
-        for alias in self.aliases:
-            # Word boundary regex: \b for latin, or boundary check for devanagari
-            boundary_pattern = r"(?<!\w)" + alias.pattern + r"(?!\w)"
-            match = re.search(boundary_pattern, lower)
-            if not match:
+        hits = self._find_books(tokens, typed)
+        for k, hit in enumerate(hits):
+            limit = hits[k + 1].start if k + 1 < len(hits) else len(tokens)
+            nums = self._scan_numbers(tokens, hit.end, limit)
+            if nums is None:
                 continue
+            result = self._book_result(tokens, hit, nums, typed)
+            if result is not None:
+                candidates.append((hit.start, result))
+                consumed.update(range(hit.start, nums.end))
 
-            book_end_pos = match.end()
-            book_start_pos = match.start()
-            remainder = text[book_end_pos:].strip()
+        if context_reference is not None:
+            candidates += self._follow_ups(tokens, consumed, context_reference)
 
-            # Attempt extraction of chapter and verse from the text right after the book
-            chap_verse = self._extract_numbers(remainder)
-            if chap_verse:
-                chapter, verse_start, verse_end, matched_tokens_str = chap_verse
+        valid = [c for c in candidates if c[1].is_valid]
+        if valid:
+            return max(valid, key=lambda c: c[0])[1]
+        return candidates[-1][1] if candidates else None
 
-                # Validate against canon verse counts
-                is_valid = self.validator.is_valid_reference(
-                    alias.book_id, chapter, verse_start, verse_end
-                )
+    # ------------------------------------------------------------------ books
+    def _find_books(self, tokens: list[str], typed: bool) -> list[_BookHit]:
+        exact = self._scan(tokens, 0, len(tokens), lambda t, i: self._exact_at(t, i, typed))
+        # fuzzy matching only inside the gaps between exact hits
+        hits: list[_BookHit] = []
+        gap_start = 0
+        for nxt in exact + [None]:
+            gap_end = nxt.start if nxt else len(tokens)
+            hits += self._scan(tokens, gap_start, gap_end, lambda t, i: self._fuzzy_at(t, i, typed))
+            if nxt:
+                hits.append(nxt)
+                gap_start = nxt.end
+        return hits
 
-                if not is_valid:
-                    # Invalid reference (e.g. John 99:1)
-                    return ParseResult(
-                        reference=None,
-                        raw_match=f"{match.group(0)} {matched_tokens_str}",
-                        confidence=0.0,
-                        low_confidence_reasons=("invalid_chapter_or_verse_count",),
-                    )
+    @staticmethod
+    def _scan(tokens: list[str], start: int, end: int, match) -> list[_BookHit]:
+        hits, i, window = [], start, tokens[:end]
+        while i < end:
+            hit = match(window, i)
+            if hit:
+                hits.append(hit)
+            i = hit.end if hit else i + 1
+        return hits
 
-                ref = BibleReference(
-                    book_id=alias.book_id,
-                    book_name=alias.canonical_name,
-                    chapter=chapter,
-                    verse_start=verse_start,
-                    verse_end=verse_end,
-                    version=version,
-                )
-
-                # Confidence calculation
-                confidence, reasons = self._calculate_confidence(
-                    text, book_start_pos, book_end_pos, alias, version, matched_tokens_str
-                )
-
-                return ParseResult(
-                    reference=ref,
-                    raw_match=text[book_start_pos : book_end_pos + len(matched_tokens_str) + 1].strip(),
-                    confidence=confidence,
-                    low_confidence_reasons=tuple(reasons),
-                )
-
-            # Check if book + chapter only was mentioned (e.g., 'turn to Romans 8')
-            chap_only = self._extract_chapter_only(remainder)
-            if chap_only:
-                chapter, matched_tokens_str = chap_only
-                if self.validator.is_valid_chapter(alias.book_id, chapter):
-                    # Chapter-only reference: default to verse 1
-                    ref = BibleReference(
-                        book_id=alias.book_id,
-                        book_name=alias.canonical_name,
-                        chapter=chapter,
-                        verse_start=1,
-                        version=version,
-                    )
-                    confidence, reasons = self._calculate_confidence(
-                        text, book_start_pos, book_end_pos, alias, version, matched_tokens_str
-                    )
-                    # Deduct slightly because verse was omitted
-                    confidence = max(0.1, confidence - 0.1)
-                    reasons.append("chapter_only_default_verse_1")
-                    return ParseResult(
-                        reference=ref,
-                        raw_match=text[book_start_pos : book_end_pos + len(matched_tokens_str) + 1].strip(),
-                        confidence=confidence,
-                        low_confidence_reasons=tuple(reasons),
-                    )
-
-        # 3. Fuzzy matching fallback for near-miss book names
-        fuzzy_res = self._find_fuzzy_book_reference(text, lower, version)
-        if fuzzy_res:
-            return fuzzy_res
-
+    def _exact_at(self, tokens: list[str], i: int, typed: bool) -> Optional[_BookHit]:
+        for n in range(min(self._max_alias_len, len(tokens) - i), 0, -1):
+            alias = self._aliases.get(tuple(tokens[i : i + n]))
+            if alias and (typed or not alias.typed_only):
+                return _BookHit(i, i + n, alias)
         return None
 
-    def _find_fuzzy_book_reference(
-        self,
-        text: str,
-        lower: str,
-        version: Optional[str],
-    ) -> Optional[ParseResult]:
-        """Scan text using fuzzy similarity against book aliases when exact match fails."""
-        words = lower.split()
-        if not words:
+    def _fuzzy_at(self, tokens: list[str], i: int, typed: bool) -> Optional[_BookHit]:
+        for n in (2, 1):
+            words = tokens[i : i + n]
+            if len(words) < n or any(w.isdigit() or w in FILLERS or w in CUE_WORDS for w in words):
+                continue
+            phrase = " ".join(words)
+            if len(phrase) < 4:
+                continue
+            best = process.extractOne(
+                phrase, self._fuzzy_keys.keys(), scorer=fuzz.ratio, score_cutoff=FUZZY_CUTOFF
+            )
+            if not best:
+                continue
+            nums = self._scan_numbers(tokens, i + n, len(tokens))
+            # a guessed book name must be followed by a full chapter AND verse
+            if nums and (nums.verse is not None or typed):
+                alias = self._fuzzy_keys[best[0]]
+                return _BookHit(i, i + n, alias, f"{phrase}->{alias.name} ({best[1]:.0f}%)")
+        return None
+
+    # ------------------------------------------------------------------ numbers
+    def _skip_fillers(self, tokens: list[str], i: int, limit: int) -> tuple[int, bool, bool]:
+        chapter_cue = verse_cue = False
+        for _ in range(4):
+            if i < limit and tokens[i] in FILLERS:
+                chapter_cue |= tokens[i] in CHAPTER_CUES
+                verse_cue |= tokens[i] in VERSE_CUES
+                i += 1
+        return i, chapter_cue, verse_cue
+
+    def _number(self, tokens: list[str], i: int, limit: int) -> Optional[tuple[int, int]]:
+        parsed = self.normalizer.parse_number(tokens[:limit], i)
+        return parsed if parsed and parsed[1] <= limit else None
+
+    def _scan_numbers(self, tokens: list[str], i: int, limit: int) -> Optional[_Numbers]:
+        """Read 'chapter [verse [- end]]' with only filler words in between."""
+        i, chapter_cue, _ = self._skip_fillers(tokens, i, limit)
+        first = self._number(tokens, i, limit)
+        if not first:
             return None
-
-        best_alias: Optional[BookAlias] = None
-        best_score: float = 0.0
-        best_span: Optional[Tuple[int, int]] = None
-        best_ngram_text = ""
-
-        # Check n-grams up to 3 words
-        for n in (3, 2, 1):
-            if best_score >= 88.0:
-                break
-            for i in range(len(words) - n + 1):
-                ngram = " ".join(words[i : i + n])
-                if len(ngram) < 3 or ngram in ("and", "the", "for", "from", "with", "verse", "chapter", "turn", "read"):
-                    continue
-
-                candidate = process.extractOne(ngram, self._fuzzy_alias_keys, scorer=fuzz.ratio)
-                if candidate and candidate[1] >= 80.0:
-                    matched_key, score = candidate[0], candidate[1]
-                    ngram_pos = lower.find(ngram)
-                    if ngram_pos != -1:
-                        remainder = text[ngram_pos + len(ngram):].strip()
-                        if self._extract_numbers(remainder) or self._extract_chapter_only(remainder):
-                            if score > best_score:
-                                best_score = score
-                                best_alias = self._fuzzy_alias_dict[matched_key]
-                                best_span = (ngram_pos, ngram_pos + len(ngram))
-                                best_ngram_text = ngram
-
-        if best_alias and best_span and best_score >= 80.0:
-            book_start_pos, book_end_pos = best_span
-            remainder = text[book_end_pos:].strip()
-            chap_verse = self._extract_numbers(remainder)
-            if chap_verse:
-                chapter, verse_start, verse_end, matched_tokens_str = chap_verse
-                if self.validator.is_valid_reference(best_alias.book_id, chapter, verse_start, verse_end):
-                    ref = BibleReference(
-                        book_id=best_alias.book_id,
-                        book_name=best_alias.canonical_name,
-                        chapter=chapter,
-                        verse_start=verse_start,
-                        verse_end=verse_end,
-                        version=version,
-                    )
-                    confidence, reasons = self._calculate_confidence(
-                        text, book_start_pos, book_end_pos, best_alias, version, matched_tokens_str
-                    )
-                    confidence = max(0.30, confidence - 0.20)
-                    reasons.append(f"fuzzy_book_match: {best_ngram_text}->{best_alias.canonical_name} ({best_score:.0f}%)")
-                    return ParseResult(
-                        reference=ref,
-                        raw_match=text[book_start_pos : book_end_pos + len(matched_tokens_str) + 1].strip(),
-                        confidence=confidence,
-                        low_confidence_reasons=tuple(reasons),
-                    )
-
-            chap_only = self._extract_chapter_only(remainder)
-            if chap_only:
-                chapter, matched_tokens_str = chap_only
-                if self.validator.is_valid_chapter(best_alias.book_id, chapter):
-                    ref = BibleReference(
-                        book_id=best_alias.book_id,
-                        book_name=best_alias.canonical_name,
-                        chapter=chapter,
-                        verse_start=1,
-                        version=version,
-                    )
-                    confidence, reasons = self._calculate_confidence(
-                        text, book_start_pos, book_end_pos, best_alias, version, matched_tokens_str
-                    )
-                    confidence = max(0.20, confidence - 0.30)
-                    reasons.append(f"fuzzy_book_match: {best_ngram_text}->{best_alias.canonical_name} ({best_score:.0f}%)")
-                    reasons.append("chapter_only_default_verse_1")
-                    return ParseResult(
-                        reference=ref,
-                        raw_match=text[book_start_pos : book_end_pos + len(matched_tokens_str) + 1].strip(),
-                        confidence=confidence,
-                        low_confidence_reasons=tuple(reasons),
-                    )
-
-        return None
-
-    def _extract_numbers(
-        self,
-        text: str,
-    ) -> Optional[Tuple[int, int, Optional[int], str]]:
-        """Extract chapter, verse_start, and optional verse_end from text."""
-        # 1. Standard format: "3:16", "3.16", "3-16", "3:16-18", "3.16-18", "3: 16"
-        std_match = re.match(r"^[:\s]*(\d+)[:\.\-]\s*(\d+)(?:\s*(?:[-–—]|to|se|तक)\s*(\d+))?", text)
-        if std_match:
-            ch = int(std_match.group(1))
-            v_start = int(std_match.group(2))
-            v_end = int(std_match.group(3)) if std_match.group(3) else None
-            return ch, v_start, v_end, std_match.group(0)
-
-        # 2. Space separated: "3 16", "3 16-18", "3 16 to 18"
-        space_match = re.match(r"^[:\s]*(\d+)\s+(\d+)(?:\s*(?:[-–—]|to|se|तक)\s*(\d+))?", text)
-        if space_match:
-            ch = int(space_match.group(1))
-            v_start = int(space_match.group(2))
-            v_end = int(space_match.group(3)) if space_match.group(3) else None
-            return ch, v_start, v_end, space_match.group(0)
-
-        # 3. Natural language with cue words:
-        # e.g.:
-        # "chapter 3 verse 16"
-        # "तीन अध्याय सोलह पद"
-        # "teen adhyay solah pad"
-        # "ke aath adhyay mein 28 pad"
-        # "teen solah" (two consecutive number words)
-        words = re.split(r"[\s,;]+", text)
-        clean_tokens = [w.strip(".,!?;:") for w in words[:12] if w.strip(".,!?;:")]
-
-        parsed_nums: List[Tuple[int, int]] = []  # (value, token_index)
-        for idx, tok in enumerate(clean_tokens):
-            num = self.normalizer.parse_number_token(tok)
-            if num is not None:
-                parsed_nums.append((num, idx))
-
-        if len(parsed_nums) >= 2:
-            ch = parsed_nums[0][0]
-            v_start = parsed_nums[1][0]
-            v_end = None
-
-            # Check if there's a 3rd number for range (e.g. "verses 5 to 9" or "16 se 18")
-            if len(parsed_nums) >= 3:
-                # If third number is close to second number
-                if parsed_nums[2][1] <= parsed_nums[1][1] + 3:
-                    v_end = parsed_nums[2][0]
-
-            matched_span = " ".join(clean_tokens[: parsed_nums[-1][1] + 1])
-            return ch, v_start, v_end, matched_span
-
-        return None
-
-    def _extract_chapter_only(self, text: str) -> Optional[Tuple[int, str]]:
-        """Extract chapter when no verse is mentioned (e.g., 'Romans 8', 'Romans chapter 8')."""
-        match = re.match(
-            r"^(?:chapter|adhyay|अध्याय|\s|ke|\:)*\s*([a-zA-Z0-9\u0900-\u097F]+)",
-            text.strip(),
-            re.IGNORECASE,
-        )
-        if match:
-            tok = match.group(1)
-            num = self.normalizer.parse_number_token(tok)
-            if num is not None and 1 <= num <= 150:
-                return num, match.group(0)
-        return None
-
-    def _calculate_confidence(
-        self,
-        full_text: str,
-        book_start: int,
-        book_end: int,
-        alias: BookAlias,
-        version: Optional[str],
-        matched_tokens: str,
-    ) -> Tuple[float, List[str]]:
-        """Compute 0.0-1.0 confidence score based on cues, abbreviation risk, and version."""
-        score = 0.85
-        reasons: List[str] = []
-
-        # Context cues around the match
-        lower_full = full_text.lower()
-        has_cue = False
-        for cue in CUE_PATTERNS:
-            if re.search(cue, lower_full):
-                has_cue = True
-                break
-
-        if has_cue:
-            score += 0.10
+        chapter, i = first
+        if i < limit and tokens[i] in (":", "-"):
+            j = i + 1
         else:
+            j, cue, _ = self._skip_fillers(tokens, i, limit)
+            chapter_cue |= cue
+        second = self._number(tokens, j, limit)
+        if not second:
+            return _Numbers(chapter, None, None, i, chapter_cue)
+        verse, i = second
+        verse_end = None
+        if i < limit and tokens[i] in RANGE_SEPS:
+            third = self._number(tokens, i + 1, limit)
+            if third and third[0] > verse:
+                verse_end, i = third
+        while i < limit and tokens[i] in VERSE_CUES | {"तक"}:
+            i += 1
+        return _Numbers(chapter, verse, verse_end, i, chapter_cue)
+
+    # ------------------------------------------------------------------ results
+    def _book_result(
+        self, tokens: list[str], hit: _BookHit, nums: _Numbers, typed: bool
+    ) -> Optional[ParseResult]:
+        book = hit.alias
+        reasons: list[str] = []
+        chapter, verse, verse_end = nums.chapter, nums.verse, nums.verse_end
+        raw = " ".join(tokens[hit.start : nums.end])
+
+        if verse is None:
+            split = self._split_run_together(book.book_id, chapter)
+            if split:
+                chapter, verse = split
+                reasons.append(f"number_split: {nums.chapter} -> {chapter}:{verse}")
+        has_cue = self._has_cue(tokens, hit.start, nums.end)
+
+        if verse is None:
+            if book.common_word and not (typed or has_cue or nums.chapter_cue):
+                return None  # "John 3" in passing is not worth a suggestion
+            if not self.validator.is_valid_chapter(book.book_id, chapter):
+                return self._invalid(raw)
+            verse = 1
+            reasons.append("chapter_only_default_verse_1")
+        elif not self.validator.is_valid_reference(book.book_id, chapter, verse, verse_end):
+            return self._invalid(raw)
+
+        score = 0.55
+        if has_cue:
+            score += 0.25
+        elif not typed:
             reasons.append("no_preacher_cue_words")
+            if book.common_word:
+                score -= 0.10
+                reasons.append("book_name_is_common_word")
+        if "chapter_only_default_verse_1" not in reasons:
+            score += 0.20
+        if hit.fuzzy:
+            score -= 0.25
+            reasons.append(f"fuzzy_book_match: {hit.fuzzy}")
+        if any(r.startswith("number_split") for r in reasons):
+            score -= 0.10
 
-        # Explicit version adds confidence
-        if version:
-            score += 0.05
+        ref = BibleReference(
+            book_id=book.book_id,
+            book_name=book.name,
+            chapter=chapter,
+            verse_start=verse,
+            verse_end=verse_end,
+            version=self._version_near(tokens, hit.start, nums.end),
+        )
+        return ParseResult(ref, raw, round(max(0.05, min(1.0, score)), 2), False, tuple(reasons))
 
-        # Very short abbreviations (e.g. 'Ge', 'Jn') are riskier in speech
-        if len(alias.pattern) <= 2:
-            score -= 0.15
-            reasons.append("short_abbreviation_ambiguity")
+    def _split_run_together(self, book_id: str, number: int) -> Optional[tuple[int, int]]:
+        """Whisper often writes 'John 316' for 'John 3 16'."""
+        digits = str(number)
+        if len(digits) < 3 or self.validator.is_valid_chapter(book_id, number):
+            return None
+        for k in range(1, len(digits)):
+            chapter, verse = int(digits[:k]), int(digits[k:])
+            if digits[k] != "0" and self.validator.is_valid_reference(book_id, chapter, verse):
+                return chapter, verse
+        return None
 
-        score = max(0.1, min(1.0, score))
-        return round(score, 2), reasons
+    def _has_cue(self, tokens: list[str], start: int, end: int) -> bool:
+        return any(t in CUE_WORDS for t in tokens[max(0, start - 6) : end])
+
+    def _version_near(self, tokens: list[str], start: int, end: int) -> Optional[str]:
+        window = tokens[max(0, start - 3) : end + 8]
+        for a, b in zip(window, window[1:] + [""]):
+            if (a, b) == ("king", "james"):
+                return "KJV"
+            if a in KNOWN_VERSIONS:
+                return KNOWN_VERSIONS[a]
+        return None
+
+    @staticmethod
+    def _invalid(raw: str) -> ParseResult:
+        return ParseResult(None, raw, 0.0, False, ("invalid_chapter_or_verse_count",))
+
+    # ------------------------------------------------------------------ follow-ups
+    def _follow_ups(
+        self, tokens: list[str], consumed: set[int], ctx: BibleReference
+    ) -> list[tuple[int, ParseResult]]:
+        out: list[tuple[int, ParseResult]] = []
+        relative = (f"relative_to: {ctx.format_reference()}",)
+        for i, tok in enumerate(tokens):
+            if i in consumed:
+                continue
+            pair = (tok, tokens[i + 1] if i + 1 < len(tokens) else "")
+            if pair in NEXT_PHRASES or pair in PREV_PHRASES:
+                delta = 1 if pair in NEXT_PHRASES else -1
+                verse = (ctx.verse_end or ctx.verse_start) + 1 if delta > 0 else ctx.verse_start - 1
+                ref = self._ctx_ref(ctx, ctx.chapter, verse, None)
+                if ref:
+                    out.append((i, ParseResult(ref, " ".join(pair), 0.9, True)))
+            elif tok in VERSE_CUES:
+                nums = self._number(tokens, i + 1, len(tokens))
+                if nums and nums[1] - 1 not in consumed:
+                    end = None
+                    if nums[1] < len(tokens) and tokens[nums[1]] in RANGE_SEPS:
+                        third = self._number(tokens, nums[1] + 1, len(tokens))
+                        end = third[0] if third and third[0] > nums[0] else None
+                    ref = self._ctx_ref(ctx, ctx.chapter, nums[0], end)
+                    if ref:
+                        raw = " ".join(tokens[i : nums[1]])
+                        out.append((i, ParseResult(ref, raw, 0.8, True, relative)))
+            elif tok in CHAPTER_CUES:
+                nums = self._scan_numbers(tokens, i, len(tokens))
+                if nums and not consumed.intersection(range(i, nums.end)):
+                    verse = nums.verse or 1
+                    ref = self._ctx_ref(ctx, nums.chapter, verse, nums.verse_end)
+                    if ref:
+                        raw = " ".join(tokens[i : nums.end])
+                        out.append((i, ParseResult(ref, raw, 0.7, True, relative)))
+                        consumed.update(range(i, nums.end))
+        return out
+
+    def _ctx_ref(
+        self, ctx: BibleReference, chapter: int, verse: int, verse_end: Optional[int]
+    ) -> Optional[BibleReference]:
+        if not self.validator.is_valid_reference(ctx.book_id, chapter, verse, verse_end):
+            return None
+        return BibleReference(ctx.book_id, ctx.book_name, chapter, verse, verse_end, ctx.version)

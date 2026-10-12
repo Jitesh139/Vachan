@@ -1,136 +1,126 @@
-"""Number normalization for Bible reference parsing.
+"""Text normalization and number parsing for Whisper output (English, Hindi, Hinglish).
 
-Handles Arabic digits ('1', '16'), Devanagari numerals ('१', '१६'),
-English words ('three', 'sixteen', 'first'), and Hindi words / Romanized Hinglish
-('तीन', 'सोलह', 'teen', 'solah', 'pehla').
+Whisper output differs from typed text in predictable ways (measured, see docs/AUDIT.md):
+commas between every word in Hindi ("यूहन्ना, तीन, अध्याय, सोलह, पद."), English loanwords
+written in Devanagari ("चैप्टर", "रोमेंस"), misspelled अध्याय ("अद्याय", "अध्याइ"),
+"13-4" for "thirteen four", Devanagari digits, nukta/chandrabindu variants.
 """
+
+from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
-# Standard English number words to integers
-ENGLISH_NUMBER_WORDS: Dict[str, int] = {
-    "zero": 0, "one": 1, "first": 1, "two": 2, "second": 2,
-    "three": 3, "third": 3, "four": 4, "fourth": 4, "five": 5, "fifth": 5,
-    "six": 6, "sixth": 6, "seven": 7, "seventh": 7, "eight": 8, "eighth": 8,
-    "nine": 9, "ninth": 9, "ten": 10, "tenth": 10,
-    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
-    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
-    "twenty-one": 21, "twenty-two": 22, "twenty-three": 23, "twenty-four": 24, "twenty-five": 25,
-    "twenty-six": 26, "twenty-seven": 27, "twenty-eight": 28, "twenty-nine": 29, "thirty": 30,
-    "thirty-one": 31, "thirty-two": 32, "thirty-three": 33, "thirty-four": 34, "thirty-five": 35,
-    "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
-    "hundred": 100, "one hundred": 100,
-}
+from vachan.core.paths import DATA_DIR
 
-DEVANAGARI_DIGITS = {
-    "०": "0", "१": "1", "२": "2", "३": "3", "४": "4",
-    "५": "5", "६": "6", "७": "7", "८": "8", "९": "9",
-}
+ENGLISH_NUMBERS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+    "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+    "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19, "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
+    "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10, "eleventh": 11,
+    "twelfth": 12,
+}  # fmt: skip
+ENGLISH_TENS = {
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+}  # fmt: skip
+HINDI_ORDINALS = {
+    "पहला": 1, "पहली": 1, "पहले": 1, "दूसरा": 2, "दूसरी": 2, "दूसरे": 2,
+    "तीसरा": 3, "तीसरी": 3, "तीसरे": 3, "चौथा": 4, "चौथी": 4, "चौथे": 4,
+    "छठा": 6, "छठी": 6, "छठे": 6,
+}  # fmt: skip
+# Romanized Hindi number words that are also everyday English/Hinglish words
+AMBIGUOUS_NUMBER_WORDS = {"do", "no", "to", "so"}
 
-# Words to not replace during aggressive sentence regex replacement to avoid false positives
-SKIP_WORDS = {"to", "no", "do", "in", "se", "ke", "ko", "or", "so"}
+DEV = "\u0900-\u097f"
+_B, _E = f"(?<![{DEV}])", f"(?![{DEV}])"  # Devanagari word edges (\b fails on matras)
+# Whisper spellings -> canonical token
+SPELLING_FIXES = [
+    (_B + "(?:अ[दध]्?या[इईये]?य?|अद्ध्याय)" + _E, "अध्याय"),
+    (_B + "च[ैे]?प्टर्?स?" + _E, "chapter"),
+    (_B + "(?:वर्सेस|वर्सेज|वर्सिस|वर्स)" + _E, "verse"),
+    (_B + "नेक्स्ट" + _E, "next"),
+    (_B + "(?:प्रीवियस|पिछला|पिछली|पिछले)" + _E, "previous"),
+]
+ORDINAL_DIGITS = re.compile(r"\b(\d+)(st|nd|rd|th)\b")
+HINDI_ORDINAL_SUFFIX = re.compile(_B + f"([{DEV}]+?)(वां|वें|वीं|वा|वे)" + _E)
+TOKEN_RE = re.compile(r"\d+|[a-z]+|[\u0900-\u0963\u0966-\u097f]+|[:\-]")
+
+
+def fold(text: str) -> str:
+    """Unicode-fold: NFC, drop nukta, chandrabindu -> anusvara, lowercase."""
+    text = unicodedata.normalize("NFD", text).replace("\u093c", "")
+    text = unicodedata.normalize("NFC", text).replace("ँ", "ं")
+    return text.lower()
 
 
 class NumberNormalizer:
-    """Normalizes numbers from digits, English words, and Hindi words."""
+    """Normalizes transcripts and parses spoken/written numbers from tokens."""
 
     def __init__(self, data_path: Optional[Path] = None) -> None:
-        if data_path is None:
-            data_path = Path(__file__).resolve().parent.parent.parent / "data" / "hindi_numbers.json"
+        path = data_path or DATA_DIR / "hindi_numbers.json"
+        raw: dict[str, int] = json.loads(path.read_text(encoding="utf-8"))
+        self.hindi = {fold(k): v for k, v in raw.items() if k not in AMBIGUOUS_NUMBER_WORDS}
+        self.hindi.update(HINDI_ORDINALS)
+        self._fixes = [(re.compile(p), r) for p, r in SPELLING_FIXES]
 
-        self.hindi_dict: Dict[str, int] = {}
-        if data_path.exists():
-            with open(data_path, "r", encoding="utf-8") as f:
-                self.hindi_dict = json.load(f)
+    def normalize(self, text: str) -> str:
+        """Canonicalize a Whisper transcript or typed query for parsing."""
+        text = fold(text).replace("’", "'").replace("‘", "'")
+        text = re.sub(r"'s\b", "", text).replace("'", "")
+        text = text.translate({0x0966 + i: str(i) for i in range(10)})  # ० - ९
+        text = ORDINAL_DIGITS.sub(r"\1", text)
+        text = re.sub(r"\b(" + "|".join(ENGLISH_TENS) + r")-", r"\1 ", text)
+        for pattern, repl in self._fixes:
+            text = pattern.sub(repl, text)
+        text = HINDI_ORDINAL_SUFFIX.sub(self._strip_ordinal_suffix, text)
+        text = re.sub(r"(\d)(?:\.|\s*:\s*)(\d)", r"\1:\2", text)
+        text = re.sub(r"(\d)\s*[-–—]\s*(\d)", r"\1-\2", text)
+        text = re.sub(r"(?<!\d)[-–—]|[-–—](?!\d)", " ", text)
+        text = re.sub(r"[^\w\u0900-\u0963\u0966-\u097f:\- ]", " ", text)
+        return re.sub(r"\s+", " ", text).strip()
 
-        # Pre-sort Hindi words by length descending
-        self._hindi_sorted_items = sorted(
-            [(k, v) for k, v in self.hindi_dict.items() if k.lower() not in SKIP_WORDS],
-            key=lambda x: len(x[0]),
-            reverse=True,
-        )
+    def _strip_ordinal_suffix(self, m: re.Match) -> str:
+        # "सोलहवां" -> "सोलह", but leave real words that merely end in "वा"
+        return m.group(1) if m.group(1) in self.hindi else m.group(0)
 
-    def convert_devanagari_digits_to_ascii(self, text: str) -> str:
-        """Convert any Devanagari numerals in the text to ASCII digits (e.g. '१६' -> '16')."""
-        out = []
-        for ch in text:
-            if ch in DEVANAGARI_DIGITS:
-                out.append(DEVANAGARI_DIGITS[ch])
-            else:
-                out.append(ch)
-        return "".join(out)
+    def tokenize(self, normalized: str) -> list[str]:
+        """Split normalized text into word, digit and separator tokens."""
+        return TOKEN_RE.findall(normalized)
 
-    def normalize_spoken_numbers_in_text(self, text: str) -> str:
-        """Pre-normalize spoken English, Hindi, and Devanagari numbers in text to ASCII digits."""
-        # 1. Convert Devanagari numerals
-        text = self.convert_devanagari_digits_to_ascii(text)
-
-        # 2. Convert compound English tens+ones (e.g. "twenty eight" -> "28")
-        tens = ["twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
-        ones = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
-        for ten in tens:
-            for one in ones:
-                val = ENGLISH_NUMBER_WORDS[ten] + ENGLISH_NUMBER_WORDS[one]
-                pattern = r"\b" + ten + r"[\s\-]+" + one + r"\b"
-                text = re.sub(pattern, str(val), text, flags=re.IGNORECASE)
-
-        # 3. Convert single English number words
-        for word, val in sorted(ENGLISH_NUMBER_WORDS.items(), key=lambda x: len(x[0]), reverse=True):
-            if " " not in word and "-" not in word and word not in SKIP_WORDS:
-                pattern = r"\b" + re.escape(word) + r"\b"
-                text = re.sub(pattern, str(val), text, flags=re.IGNORECASE)
-
-        # 4. Convert Hindi number words (both Devanagari and Romanized)
-        for word, val in self._hindi_sorted_items:
-            # Check if devanagari or latin
-            is_ascii = all(ord(c) < 128 for c in word)
-            if is_ascii:
-                pattern = r"\b" + re.escape(word) + r"\b"
-                text = re.sub(pattern, str(val), text, flags=re.IGNORECASE)
-            else:
-                pattern = r"(?<![\u0900-\u097F\w])" + re.escape(word) + r"(?![\u0900-\u097F\w])"
-                text = re.sub(pattern, str(val), text)
-
-        return text
+    def parse_number(self, tokens: list[str], i: int) -> Optional[tuple[int, int]]:
+        """Parse a number starting at tokens[i]; return (value, next_index)."""
+        if i >= len(tokens):
+            return None
+        tok = tokens[i]
+        if tok.isdigit():
+            return int(tok), i + 1
+        if tok in ENGLISH_TENS:
+            value = ENGLISH_TENS[tok]
+            if i + 1 < len(tokens) and ENGLISH_NUMBERS.get(tokens[i + 1], 99) < 10:
+                return value + ENGLISH_NUMBERS[tokens[i + 1]], i + 2
+            return value, i + 1
+        nxt = tokens[i + 1] if i + 1 < len(tokens) else ""
+        if tok in ("hundred", "सौ") or (tok in ("one", "a", "एक") and nxt in ("hundred", "सौ")):
+            j = i + 1 if tok in ("hundred", "सौ") else i + 2
+            if j < len(tokens) and tokens[j] in ("and", "और"):
+                j += 1
+            rest = self.parse_number(tokens, j)
+            if rest and rest[0] < 100:
+                return 100 + rest[0], rest[1]
+            return 100, j
+        if tok in ENGLISH_NUMBERS:
+            return ENGLISH_NUMBERS[tok], i + 1
+        if tok in self.hindi:
+            return self.hindi[tok], i + 1
+        return None
 
     def parse_number_token(self, token: str) -> Optional[int]:
-        """Convert a single token or clean phrase into an integer, if recognizable."""
-        token = token.strip().lower()
-        if not token:
-            return None
-
-        # Check pure ASCII digits
-        if token.isdigit():
-            try:
-                return int(token)
-            except ValueError:
-                return None
-
-        # Check Devanagari digits
-        ascii_candidate = self.convert_devanagari_digits_to_ascii(token)
-        if ascii_candidate.isdigit():
-            try:
-                return int(ascii_candidate)
-            except ValueError:
-                return None
-
-        # Check English number words
-        if token in ENGLISH_NUMBER_WORDS:
-            return ENGLISH_NUMBER_WORDS[token]
-
-        # Check compound English numbers like "twenty five"
-        parts = token.replace("-", " ").split()
-        if len(parts) == 2 and parts[0] in ENGLISH_NUMBER_WORDS and parts[1] in ENGLISH_NUMBER_WORDS:
-            tens = ENGLISH_NUMBER_WORDS[parts[0]]
-            ones = ENGLISH_NUMBER_WORDS[parts[1]]
-            if tens in (20, 30, 40, 50, 60, 70, 80, 90) and 1 <= ones <= 9:
-                return tens + ones
-
-        # Check Hindi number dictionary (Devanagari and Romanized)
-        if token in self.hindi_dict:
-            return int(self.hindi_dict[token])
-
-        return None
+        """Parse a single word/phrase as a number, or None."""
+        tokens = self.tokenize(self.normalize(token))
+        parsed = self.parse_number(tokens, 0) if tokens else None
+        return parsed[0] if parsed and parsed[1] == len(tokens) else None

@@ -12,7 +12,12 @@
       "utpatti",
       "utpati"
     ],
-    "chapter_count": 50
+    "chapter_count": 50,
+    "spoken_aliases": [
+      "जेनेसिस",
+      "जेनसिस",
+      "उत्पति"
+    ]
   },
   {
     "id": "EXO",
@@ -26,7 +31,10 @@
     "roman_aliases": [
       "nirgaman"
     ],
-    "chapter_count": 40
+    "chapter_count": 40,
+    "spoken_aliases": [
+      "एक्सोडस"
+    ]
   },
   {
     "id": "LEV",
@@ -42,7 +50,11 @@
       "levyavyavastha",
       "levy"
     ],
-    "chapter_count": 27
+    "chapter_count": 27,
+    "spoken_aliases": [
+      "लेविटिकस",
+      "लैव्यवस्था"
+    ]
   },
   {
     "id": "NUM",
@@ -57,7 +69,11 @@
     "roman_aliases": [
       "ginti"
     ],
-    "chapter_count": 36
+    "chapter_count": 36,
+    "spoken_aliases": [
+      "नंबर्स",
+      "गिनती"
+    ]
   },
   {
     "id": "DEU",
@@ -72,7 +88,13 @@
       "vyavasthavivaran",
       "vyavastha vivaran"
     ],
-    "chapter_count": 34
+    "chapter_count": 34,
+    "spoken_aliases": [
+      "ड्यूटरोनॉमी",
+      "ड्यूटेरोनोमी",
+      "डियूटरोनोमी",
+      "व्यवस्था विवरण"
+    ]
   },
   {
     "id": "JOS",
@@ -88,7 +110,11 @@
       "yehoshu",
       "yahoshua"
     ],
-    "chapter_count": 24
+    "chapter_count": 24,
+    "spoken_aliases": [
+      "जोशुआ",
+      "यहोशु"
+    ]
   },
   {
     "id": "JDG",
@@ -105,7 +131,11 @@
       "nyayiyo",
       "nyayi"
     ],
-    "chapter_count": 21
+    "chapter_count": 21,
+    "spoken_aliases": [
+      "जजेस",
+      "न्यायियो"
+    ]
   },
   {
     "id": "RUT",
@@ -119,7 +149,12 @@
       "root",
       "ruth"
     ],
-    "chapter_count": 4
+    "chapter_count": 4,
+    "spoken_aliases": [
+      "रुथ",
+      "रूथ",
+      "रुत"
+    ]
   },
   {
     "id": "1SA",
@@ -141,7 +176,12 @@
       "pehla shamuel",
       "shamuvel"
     ],
-    "chapter_count": 31
+    "chapter_count": 31,
+    "spoken_aliases": [
+      "सैमुअल",
+      "सेमुअल",
+      "शमुएल"
+    ]
   },
   {
     "id": "2SA",
@@ -163,7 +203,12 @@
       "2 shamuel",
       "doosra shamuel"
     ],
-    "chapter_count": 24
+    "chapter_count": 24,
+    "spoken_aliases": [
+      "सैमुअल",
+      "सेमुअल",
+      "शमुएल"
+    ]
   },
   {
     "id": "1KI",
@@ -183,7 +228,11 @@
       "pehla raja",
       "1 kings"
     ],
-    "chapter_count": 22
+    "chapter_count": 22,
+    "spoken_aliases": [
+      "किंग्स",
+      "राजाओं"
+    ]
   },
   {
     "id": "2KI",
@@ -204,7 +253,11 @@
       "dusra raja",
       "2 kings"
     ],
-    "chapter_count": 25
+    "chapter_count": 25,
+    "spoken_aliases": [
+      "किंग्स",
+      "राजाओं"
+    ]
   },
   {
     "id": "1CH",
@@ -222,7 +275,11 @@
       "pehla itihas",
       "1 chronicles"
     ],
-    "chapter_count": 29
+    "chapter_count": 29,
+    "spoken_aliases": [
+      "क्रॉनिकल्स",
+      "क्रोनिकल्स"
+    ]
   },
   {
     "id": "2CH",
@@ -241,7 +298,11 @@
       "dusra itihas",
       "2 chronicles"
     ],
-    "chapter_count": 36
+    "chapter_count": 36,
+    "spoken_aliases": [
+      "क्रॉनिकल्स",
+      "क्रोनिकल्स"
+    ]
   },
   {
     "id": "EZR",
@@ -254,7 +315,10 @@
       "ezra",
       "ejra"
     ],
-    "chapter_count": 10
+    "chapter_count": 10,
+    "spoken_aliases": [
+      "एजरा"
+    ]
   },
   {
     "id": "NEH",
@@ -269,7 +333,13 @@
       "nehemyah",
       "nehemaya"
     ],
-    "chapter_count": 13
+    "chapter_count": 13,
+    "spoken_aliases": [
+      "नहेम्याह",
+      "नेहेमायाह",
+      "नीहेमायाह",
+      "नेहेमिया"
+    ]
   },
   {
     "id": "EST",
@@ -284,7 +354,11 @@
       "esther",
       "ester"
     ],
-    "chapter_count": 10
+    "chapter_count": 10,
+    "spoken_aliases": [
+      "एस्थर",
+      "एस्टर"
+    ]
   },
   {
     "id": "JOB",
@@ -299,7 +373,11 @@
       "ayub",
       "job"
     ],
-    "chapter_count": 42
+    "chapter_count": 42,
+    "spoken_aliases": [
+      "जॉब",
+      "अय्युब"
+    ]
   },
   {
     "id": "PSA",
@@ -319,7 +397,16 @@
       "psalms",
       "psalm"
     ],
-    "chapter_count": 150
+    "chapter_count": 150,
+    "spoken_aliases": [
+      "साम्स",
+      "सॉम्स",
+      "साम",
+      "भजनसंहिता",
+      "भजन सहिता",
+      "जबूर",
+      "जबुर"
+    ]
   },
   {
     "id": "PRO",
@@ -336,7 +423,12 @@
       "nitivachan",
       "proverbs"
     ],
-    "chapter_count": 31
+    "chapter_count": 31,
+    "spoken_aliases": [
+      "प्रोवर्ब्स",
+      "प्रोवर्ब",
+      "नीति वचन"
+    ]
   },
   {
     "id": "ECC",
@@ -352,7 +444,11 @@
       "sabhopdeshak",
       "ecclesiastes"
     ],
-    "chapter_count": 12
+    "chapter_count": 12,
+    "spoken_aliases": [
+      "एक्लीसियास्टीज",
+      "एक्लेसियास्टेस"
+    ]
   },
   {
     "id": "SNG",
@@ -369,7 +465,12 @@
       "shreshth git",
       "song of songs"
     ],
-    "chapter_count": 8
+    "chapter_count": 8,
+    "spoken_aliases": [
+      "सॉन्ग ऑफ सोलोमन",
+      "सॉन्ग ऑफ सॉन्ग्स",
+      "श्रेष्ठ गीत"
+    ]
   },
   {
     "id": "ISA",
@@ -384,7 +485,15 @@
       "yashaya",
       "isaiah"
     ],
-    "chapter_count": 66
+    "chapter_count": 66,
+    "spoken_aliases": [
+      "आइजेया",
+      "आइजाया",
+      "आईजेया",
+      "इसायाह",
+      "यशायाह",
+      "यशाया"
+    ]
   },
   {
     "id": "JER",
@@ -400,7 +509,12 @@
       "yirmaya",
       "jeremiah"
     ],
-    "chapter_count": 52
+    "chapter_count": 52,
+    "spoken_aliases": [
+      "जेरेमायाह",
+      "जेरेमिया",
+      "यिर्मयाह"
+    ]
   },
   {
     "id": "LAM",
@@ -415,7 +529,11 @@
       "vilapgit",
       "lamentations"
     ],
-    "chapter_count": 5
+    "chapter_count": 5,
+    "spoken_aliases": [
+      "लैमेंटेशंस",
+      "विलाप गीत"
+    ]
   },
   {
     "id": "EZK",
@@ -430,7 +548,12 @@
       "yehezkel",
       "ezekiel"
     ],
-    "chapter_count": 48
+    "chapter_count": 48,
+    "spoken_aliases": [
+      "इजेकिएल",
+      "एजेकियल",
+      "यहेजकेल"
+    ]
   },
   {
     "id": "DAN",
@@ -446,7 +569,13 @@
       "daniel",
       "daniyel"
     ],
-    "chapter_count": 12
+    "chapter_count": 12,
+    "spoken_aliases": [
+      "डैनियल",
+      "डेनियल",
+      "दानिएल",
+      "दानियेल"
+    ]
   },
   {
     "id": "HOS",
@@ -461,7 +590,10 @@
       "hosea",
       "hoshay"
     ],
-    "chapter_count": 14
+    "chapter_count": 14,
+    "spoken_aliases": [
+      "होसिया"
+    ]
   },
   {
     "id": "JOL",
@@ -476,7 +608,10 @@
       "yoel",
       "joel"
     ],
-    "chapter_count": 3
+    "chapter_count": 3,
+    "spoken_aliases": [
+      "जोएल"
+    ]
   },
   {
     "id": "AMO",
@@ -490,7 +625,10 @@
       "aamos",
       "amos"
     ],
-    "chapter_count": 9
+    "chapter_count": 9,
+    "spoken_aliases": [
+      "एमोस"
+    ]
   },
   {
     "id": "OBA",
@@ -504,7 +642,11 @@
       "obadyah",
       "obadiah"
     ],
-    "chapter_count": 1
+    "chapter_count": 1,
+    "spoken_aliases": [
+      "ओबेदिया",
+      "ओबद्या"
+    ]
   },
   {
     "id": "JON",
@@ -519,7 +661,10 @@
       "yona",
       "jonah"
     ],
-    "chapter_count": 4
+    "chapter_count": 4,
+    "spoken_aliases": [
+      "जोनाह"
+    ]
   },
   {
     "id": "MIC",
@@ -534,7 +679,10 @@
       "mika",
       "micah"
     ],
-    "chapter_count": 7
+    "chapter_count": 7,
+    "spoken_aliases": [
+      "माइका"
+    ]
   },
   {
     "id": "NAM",
@@ -548,7 +696,10 @@
       "nahoom",
       "nahum"
     ],
-    "chapter_count": 3
+    "chapter_count": 3,
+    "spoken_aliases": [
+      "नेहम"
+    ]
   },
   {
     "id": "HAB",
@@ -562,7 +713,11 @@
       "habakkook",
       "habakkuk"
     ],
-    "chapter_count": 3
+    "chapter_count": 3,
+    "spoken_aliases": [
+      "हबकूक",
+      "हबक्कुक"
+    ]
   },
   {
     "id": "ZEP",
@@ -577,7 +732,11 @@
       "sapanyah",
       "zephaniah"
     ],
-    "chapter_count": 3
+    "chapter_count": 3,
+    "spoken_aliases": [
+      "जेफन्याह",
+      "जेफनायाह"
+    ]
   },
   {
     "id": "HAG",
@@ -591,7 +750,11 @@
       "haggai",
       "haggay"
     ],
-    "chapter_count": 2
+    "chapter_count": 2,
+    "spoken_aliases": [
+      "हैगाई",
+      "हग्गै"
+    ]
   },
   {
     "id": "ZEC",
@@ -608,7 +771,12 @@
       "zechariah",
       "zakaryah"
     ],
-    "chapter_count": 14
+    "chapter_count": 14,
+    "spoken_aliases": [
+      "जकरायाह",
+      "जकरियाह",
+      "जकर्या"
+    ]
   },
   {
     "id": "MAL",
@@ -622,7 +790,11 @@
       "malaki",
       "malachi"
     ],
-    "chapter_count": 4
+    "chapter_count": 4,
+    "spoken_aliases": [
+      "मैलाकाई",
+      "मलाकि"
+    ]
   },
   {
     "id": "MAT",
@@ -637,7 +809,14 @@
       "matti",
       "matthew"
     ],
-    "chapter_count": 28
+    "chapter_count": 28,
+    "spoken_aliases": [
+      "मैथ्यू",
+      "मैथ्यूज",
+      "मत्ति",
+      "मथ्थी",
+      "मती"
+    ]
   },
   {
     "id": "MRK",
@@ -652,7 +831,12 @@
       "markus",
       "mark"
     ],
-    "chapter_count": 16
+    "chapter_count": 16,
+    "spoken_aliases": [
+      "मार्क",
+      "मरकुस",
+      "मरकूस"
+    ]
   },
   {
     "id": "LUK",
@@ -667,7 +851,11 @@
       "luka",
       "luke"
     ],
-    "chapter_count": 24
+    "chapter_count": 24,
+    "spoken_aliases": [
+      "ल्यूक",
+      "लुका"
+    ]
   },
   {
     "id": "JHN",
@@ -684,7 +872,14 @@
       "yohanna",
       "john"
     ],
-    "chapter_count": 21
+    "chapter_count": 21,
+    "spoken_aliases": [
+      "जॉन",
+      "जोन",
+      "युहन्ना",
+      "यूहन्ना",
+      "यहुन्ना"
+    ]
   },
   {
     "id": "ACT",
@@ -700,7 +895,13 @@
       "acts",
       "prerit"
     ],
-    "chapter_count": 28
+    "chapter_count": 28,
+    "spoken_aliases": [
+      "एक्ट्स",
+      "प्रेरितो के काम",
+      "प्रेरितों",
+      "प्रेरितो"
+    ]
   },
   {
     "id": "ROM",
@@ -717,7 +918,19 @@
       "romans",
       "romi"
     ],
-    "chapter_count": 16
+    "chapter_count": 16,
+    "spoken_aliases": [
+      "रोमन्स",
+      "रोमंस",
+      "रोमेंस",
+      "रूमेंस",
+      "रूमेन्स",
+      "रोमेन्स",
+      "रोमियो",
+      "रोमियों",
+      "रूमियों",
+      "रोमियोन"
+    ]
   },
   {
     "id": "1CO",
@@ -737,7 +950,14 @@
       "1 corinthians",
       "pehla corinthians"
     ],
-    "chapter_count": 16
+    "chapter_count": 16,
+    "spoken_aliases": [
+      "कोरिंथियंस",
+      "कोरिंथियन्स",
+      "कुरिन्थियों",
+      "कुरिंथियों",
+      "कुरिन्थियो"
+    ]
   },
   {
     "id": "2CO",
@@ -757,7 +977,14 @@
       "dusra kurinthiyon",
       "2 corinthians"
     ],
-    "chapter_count": 13
+    "chapter_count": 13,
+    "spoken_aliases": [
+      "कोरिंथियंस",
+      "कोरिंथियन्स",
+      "कुरिन्थियों",
+      "कुरिंथियों",
+      "कुरिन्थियो"
+    ]
   },
   {
     "id": "GAL",
@@ -773,7 +1000,13 @@
       "galatians",
       "galati"
     ],
-    "chapter_count": 6
+    "chapter_count": 6,
+    "spoken_aliases": [
+      "गलेशियंस",
+      "गलेशियन्स",
+      "गलातियों",
+      "गलतियो"
+    ]
   },
   {
     "id": "EPH",
@@ -790,7 +1023,14 @@
       "efisiyo",
       "efisi"
     ],
-    "chapter_count": 6
+    "chapter_count": 6,
+    "spoken_aliases": [
+      "इफीसियंस",
+      "एफिसियंस",
+      "इफिशियंस",
+      "एफीजियंस",
+      "इफिसियो"
+    ]
   },
   {
     "id": "PHP",
@@ -807,7 +1047,13 @@
       "philippians",
       "philipiyo"
     ],
-    "chapter_count": 4
+    "chapter_count": 4,
+    "spoken_aliases": [
+      "फिलिपियंस",
+      "फिलिप्पियंस",
+      "फिलिपियों",
+      "फिलिप्पियो"
+    ]
   },
   {
     "id": "COL",
@@ -822,7 +1068,12 @@
       "kulussiyo",
       "colossians"
     ],
-    "chapter_count": 4
+    "chapter_count": 4,
+    "spoken_aliases": [
+      "कोलोसियंस",
+      "कोलोसियन्स",
+      "कुलुस्सियो"
+    ]
   },
   {
     "id": "1TH",
@@ -840,7 +1091,11 @@
       "pehla thissaluniki",
       "1 thessalonians"
     ],
-    "chapter_count": 5
+    "chapter_count": 5,
+    "spoken_aliases": [
+      "थेसलोनियंस",
+      "थिस्सलुनीकियो"
+    ]
   },
   {
     "id": "2TH",
@@ -858,7 +1113,11 @@
       "doosra thissaluniki",
       "2 thessalonians"
     ],
-    "chapter_count": 3
+    "chapter_count": 3,
+    "spoken_aliases": [
+      "थेसलोनियंस",
+      "थिस्सलुनीकियो"
+    ]
   },
   {
     "id": "1TI",
@@ -877,7 +1136,12 @@
       "1 timothy",
       "pehla timuthiyus"
     ],
-    "chapter_count": 6
+    "chapter_count": 6,
+    "spoken_aliases": [
+      "टिमोथी",
+      "तिमोथी",
+      "तीमुथियुस"
+    ]
   },
   {
     "id": "2TI",
@@ -896,7 +1160,12 @@
       "2 timothy",
       "dusra timuthiyus"
     ],
-    "chapter_count": 4
+    "chapter_count": 4,
+    "spoken_aliases": [
+      "टिमोथी",
+      "तिमोथी",
+      "तीमुथियुस"
+    ]
   },
   {
     "id": "TIT",
@@ -910,7 +1179,10 @@
       "teetus",
       "titus"
     ],
-    "chapter_count": 3
+    "chapter_count": 3,
+    "spoken_aliases": [
+      "टाइटस"
+    ]
   },
   {
     "id": "PHM",
@@ -925,7 +1197,11 @@
       "filemon",
       "philemon"
     ],
-    "chapter_count": 1
+    "chapter_count": 1,
+    "spoken_aliases": [
+      "फाइलेमन",
+      "फिलेमन"
+    ]
   },
   {
     "id": "HEB",
@@ -941,7 +1217,12 @@
       "hebrews",
       "ibrani"
     ],
-    "chapter_count": 13
+    "chapter_count": 13,
+    "spoken_aliases": [
+      "हिब्रूज",
+      "हिब्रूस",
+      "इब्रानियो"
+    ]
   },
   {
     "id": "JAS",
@@ -956,7 +1237,10 @@
       "yakub",
       "james"
     ],
-    "chapter_count": 5
+    "chapter_count": 5,
+    "spoken_aliases": [
+      "जेम्स"
+    ]
   },
   {
     "id": "1PE",
@@ -976,7 +1260,10 @@
       "1 peter",
       "pehla peter"
     ],
-    "chapter_count": 5
+    "chapter_count": 5,
+    "spoken_aliases": [
+      "पीटर"
+    ]
   },
   {
     "id": "2PE",
@@ -996,7 +1283,10 @@
       "2 peter",
       "dusra peter"
     ],
-    "chapter_count": 3
+    "chapter_count": 3,
+    "spoken_aliases": [
+      "पीटर"
+    ]
   },
   {
     "id": "1JN",
@@ -1016,7 +1306,12 @@
       "1 john",
       "pehla john"
     ],
-    "chapter_count": 5
+    "chapter_count": 5,
+    "spoken_aliases": [
+      "जॉन",
+      "युहन्ना",
+      "यूहन्ना"
+    ]
   },
   {
     "id": "2JN",
@@ -1036,7 +1331,12 @@
       "2 john",
       "dusra john"
     ],
-    "chapter_count": 1
+    "chapter_count": 1,
+    "spoken_aliases": [
+      "जॉन",
+      "युहन्ना",
+      "यूहन्ना"
+    ]
   },
   {
     "id": "3JN",
@@ -1056,7 +1356,12 @@
       "3 john",
       "tisra john"
     ],
-    "chapter_count": 1
+    "chapter_count": 1,
+    "spoken_aliases": [
+      "जॉन",
+      "युहन्ना",
+      "यूहन्ना"
+    ]
   },
   {
     "id": "JUD",
@@ -1072,7 +1377,11 @@
       "yahuda",
       "jude"
     ],
-    "chapter_count": 1
+    "chapter_count": 1,
+    "spoken_aliases": [
+      "ज्यूड",
+      "यहुदा"
+    ]
   },
   {
     "id": "REV",
@@ -1089,6 +1398,13 @@
       "prakashit",
       "revelation"
     ],
-    "chapter_count": 22
+    "chapter_count": 22,
+    "spoken_aliases": [
+      "रेवलेशन",
+      "रिवीलेशन",
+      "रेवेलेशन",
+      "रेवलेशंस",
+      "प्रकाशित वाक्य"
+    ]
   }
 ]
