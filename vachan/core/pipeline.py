@@ -162,14 +162,15 @@ class PipelineWorker:
                 self._recover_audio(stop)
                 continue
             try:
-                self._tick()
+                self._tick(stop)
                 errors = 0
             except Exception as e:
                 errors += 1
                 log.exception("Pipeline step failed")
                 self.events.error(f"Processing error: {e}")
                 stop.wait(min(10.0, errors))  # back off, keep the service running
-        self.audio.stop()
+        if stop is self._stop:  # a quick Stop->Start may already own the audio stream
+            self.audio.stop()
 
     def _open_audio(self) -> bool:
         try:
@@ -194,7 +195,7 @@ class PipelineWorker:
                 log.info("Audio retry failed: %s", e)
             stop.wait(3.0)
 
-    def _tick(self) -> None:
+    def _tick(self, stop: Optional[threading.Event] = None) -> None:
         s = self.settings
         audio = self.audio.read_latest(s.window_sec)
         if len(audio) < 16000:
@@ -220,7 +221,7 @@ class PipelineWorker:
             self._state.shown_text = text
             if fresh:
                 self.events.transcript(fresh, t.language)
-        if suggestion:
+        if suggestion and not (stop and stop.is_set()):
             self.events.suggestion(suggestion)
 
     def _parse_text(self) -> str:

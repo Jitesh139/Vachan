@@ -1,68 +1,94 @@
-"""Capture screenshots of the ControlWindow and VerseDisplayWindow."""
+"""Render both windows with realistic content and save PNG screenshots.
 
+    python scripts/capture_ui.py --scale 1.25 [--theme "Royal Blue"] [--out docs/screenshots]
+The scale emulates Windows display scaling (100% / 125% / 150%) via QT_SCALE_FACTOR.
+"""
+
+from __future__ import annotations
+
+import argparse
 import os
 import sys
 from pathlib import Path
-from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication
 
-# Ensure project root in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from vachan.audio.source import LiveAudioSource
-from vachan.bible.provider import LocalSqliteBibleProvider
-from vachan.output.verse_window import VerseDisplayWindow
-from vachan.parser.parser import ReferenceParser
-from vachan.stt.transcriber import WhisperTranscriber
-from vachan.ui.main_window import ControlWindow
 
+def main() -> int:
+    """Build the UI offscreen-free, populate it, grab PNGs."""
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--scale", type=float, default=1.0)
+    ap.add_argument("--theme", default="Midnight")
+    ap.add_argument("--mode", default="both")
+    ap.add_argument("--out", type=Path, default=Path("docs/screenshots"))
+    args = ap.parse_args()
+    os.environ["QT_SCALE_FACTOR"] = str(args.scale)
 
-def capture():
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication
+
+    from vachan.bible.provider import LocalSqliteBibleProvider
+    from vachan.core.models import ChunkDebugInfo
+    from vachan.core.settings import Settings
+    from vachan.output.verse_window import VerseDisplayWindow
+    from vachan.parser import ReferenceParser
+    from vachan.stt.transcriber import WhisperTranscriber
+    from vachan.ui import theme
+    from vachan.ui.main_window import ControlWindow
+
     app = QApplication(sys.argv)
+    theme.load_fonts()
+    app.setStyleSheet(theme.STYLESHEET)
+    settings = Settings(theme=args.theme, display_mode=args.mode)
+    parser, bible = ReferenceParser(), LocalSqliteBibleProvider()
+    output = VerseDisplayWindow(args.theme, args.mode)
+    win = ControlWindow(settings, WhisperTranscriber(settings), parser, bible, output)
+    win.settings.save = lambda *a: None  # never touch the user's settings.json
 
-    artifacts_dir = Path(__file__).resolve().parent.parent / "docs" / "screenshots"
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    def suggest(text: str, ctx=None):
+        return win.pipeline.build_suggestion(parser.parse(text, context_reference=ctx))
 
-    audio_source = LiveAudioSource(device_index=None)
-    transcriber = WhisperTranscriber(model_size="tiny", device="cpu")
-    parser = ReferenceParser()
-    bible_provider = LocalSqliteBibleProvider()
+    win._set_listening(True)
+    win._on_status("Listening on Microphone (USB Audio Mixer) - Whisper large-v3-turbo on GPU")
+    win.transcriber.device, win.transcriber.model_name = "cuda", "large-v3-turbo"
+    win._on_status("")
+    for line, lang in [
+        ("Good morning church, it is such a blessing to be together today.", "en"),
+        ("आज हम परमेश्वर के प्रेम के बारे में बात करेंगे।", "hi"),
+        ("Turn with me to John chapter 3 verse 16.", "en"),
+    ]:
+        win._on_transcript(line, lang)
+    first = suggest("Turn to John chapter 3 verse 16")
+    win._on_suggestion(first)
+    win.approve()
+    win._on_transcript("अब रोमियों के आठ अध्याय में 28 पद देखेंगे।", "hi")
+    second = suggest("रोमियों के आठ अध्याय में 28 पद देखेंगे")
+    win._on_suggestion(second)
+    win._on_transcript("And the next verse in the NIV says", "en")
+    third = suggest("Psalm 23 verse 1 in the NIV")
+    win._set_suggestion(third)
+    win.btn_debug.setChecked(True)
+    win._on_debug(ChunkDebugInfo("10:42:07.512", 0.0412, 7.0, "Microphone (USB Audio Mixer)", 48000,
+                                 "Psalm 23 verse 1 in the NIV", "en", 0.34, "", "MATCH Psalms 23:1 (conf 1.00)"))  # fmt: skip
+    win.resize(1280, 800)
+    win.show()
+    output.resize(1280, 720)
+    output.show()
+    output.show_suggestion(first)
 
-    verse_win = VerseDisplayWindow(theme_name="Midnight")
-    verse_win.set_verse(
-        reference_text="John 3:16 · KJV",
-        text_en="For God so loved the world, that he gave his only begotten Son, that whosoever believeth in him should not perish, but have everlasting life.",
-        text_hi="क्योंकि परमेश्वर ने जगत से ऐसा प्रेम रखा कि उसने अपना एकलौता पुत्र दे दिया, ताकि जो कोई उस पर विश्वास करे वह नाश न हो, परन्तु अनन्त जीवन पाए।",
-    )
-    verse_win.resize(1100, 680)
-    verse_win.show()
-
-    control_win = ControlWindow(
-        audio_source=audio_source,
-        transcriber=transcriber,
-        parser=parser,
-        bible_provider=bible_provider,
-        verse_window=verse_win,
-    )
-    control_win.transcript_box.append("• Good morning church, welcome to Sunday service.")
-    control_win.transcript_box.append("• Let us open our Bibles together to John 3:16.")
-    control_win.transcript_box.append("<span style='color: #E5A93C; font-weight: bold;'>[DETECTED REFERENCE: John 3:16 (KJV)]</span>")
-    control_win.show()
-
-    def do_grab():
-        # Grab screenshots
-        pix_ctrl = control_win.grab()
-        pix_ctrl.save(str(artifacts_dir / "control_window.png"))
-
-        pix_verse = verse_win.grab()
-        pix_verse.save(str(artifacts_dir / "verse_window.png"))
-
-        print("Screenshots captured successfully.")
+    def grab() -> None:
+        args.out.mkdir(parents=True, exist_ok=True)
+        tag = f"{round(args.scale * 100)}"
+        win.grab().save(str(args.out / f"control_{tag}.png"))
+        name = args.theme.split()[0].lower()
+        output.grab().save(str(args.out / f"output_{name}_{args.mode}_{tag}.png"))
+        print("saved", args.out)
         app.quit()
 
-    QTimer.singleShot(500, do_grab)
+    QTimer.singleShot(1200, grab)
     app.exec()
+    return 0
 
 
 if __name__ == "__main__":
-    capture()
+    sys.exit(main())

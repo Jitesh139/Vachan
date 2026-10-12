@@ -1,685 +1,714 @@
-"""Main PySide6 operator control window for Vachan.
+"""Operator control window: live transcript, suggestion approval, search, history, debug."""
 
-Features:
-- Live audio input selector and smooth RMS audio level meter.
-- Start / Stop listening toggle button with status indicators.
-- Live rolling transcript panel with Devanagari font support and auto-scroll.
-- Reference suggestion card with Show (Enter) and Dismiss (Esc) controls.
-- Manual Bible search input box (e.g. 'John 3:16') for fallback.
-- Auto-show vs Manual approval mode toggle.
-- Theme selector and Language mode (Both / English / Hindi) for the verse window.
-- Quick button to show / hide the separate borderless output window.
-"""
+from __future__ import annotations
 
+import html
+import logging
+import os
+import threading
+from dataclasses import asdict
 from typing import Optional
-from PySide6.QtCore import QObject, QRect, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QIcon, QKeyEvent, QPainter
+
+from PySide6.QtCore import QObject, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QKeySequence, QLinearGradient, QPainter, QShortcut, QTextCursor
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
-    QProgressBar,
+    QPlainTextEdit,
     QPushButton,
-    QRadioButton,
     QScrollArea,
     QSizePolicy,
     QSplitter,
-    QTextEdit,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
 
-from vachan.audio.source import AudioDeviceManager, LiveAudioSource
-from vachan.bible.provider import LocalSqliteBibleProvider
-from vachan.core.models import BibleReference, ChunkDebugInfo, ParseResult
-from vachan.core.pipeline import PipelineWorker
+from vachan.audio.source import LiveAudioSource, list_input_devices
+from vachan.core.approval import describe_warning, should_auto_show
+from vachan.core.models import ChunkDebugInfo, Suggestion
+from vachan.core.paths import LOGS_DIR
+from vachan.core.pipeline import PipelineEvents, PipelineWorker
+from vachan.core.settings import Settings
 from vachan.output.verse_window import THEMES, VerseDisplayWindow
-from vachan.parser.parser import ReferenceParser
-from vachan.stt.transcriber import WhisperTranscriber
+from vachan.ui import theme
+from vachan.ui.settings_dialog import STT_FIELDS, SettingsDialog
+
+log = logging.getLogger(__name__)
 
 
-class PipelineBridge(QObject):
-    """Qt signal bridge dispatches background thread events safely to the Qt GUI thread."""
+class Bridge(QObject):
+    """Moves pipeline callbacks (worker thread) onto the GUI thread."""
 
-    transcript_received = Signal(str)
-    verse_detected = Signal(object, str, str)  # ParseResult, text_en, text_hi
-    error_occurred = Signal(str)
-    debug_info_received = Signal(object)  # ChunkDebugInfo
+    status = Signal(str)
+    transcript = Signal(str, str)
+    suggestion = Signal(object)
+    error = Signal(str)
+    debug = Signal(object)
+
+
+class LevelMeter(QWidget):
+    """Rounded segmented audio meter."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.level = 0.0
+        self.setFixedSize(120, 10)
+        self.setToolTip("Input level")
+
+    def set_level(self, level: float) -> None:
+        """Update and repaint if changed."""
+        if abs(level - self.level) > 0.005:
+            self.level = level
+            self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        """Track + gradient fill."""
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(theme.SURFACE_2))
+        p.drawRoundedRect(r, 5, 5)
+        if self.level > 0:
+            grad = QLinearGradient(r.topLeft(), r.topRight())
+            grad.setColorAt(0, QColor(theme.GREEN))
+            grad.setColorAt(0.75, QColor(theme.AMBER))
+            grad.setColorAt(1, QColor(theme.RED))
+            p.setBrush(grad)
+            p.drawRoundedRect(QRectF(r.left(), r.top(), r.width() * self.level, r.height()), 5, 5)
+
+
+def _label(text: str = "", name: str = "", wrap: bool = False) -> QLabel:
+    lbl = QLabel(text)
+    if name:
+        lbl.setObjectName(name)
+    lbl.setWordWrap(wrap)
+    return lbl
+
+
+def _card(name: str = "Card") -> tuple[QFrame, QVBoxLayout]:
+    frame = QFrame()
+    frame.setObjectName(name)
+    layout = QVBoxLayout(frame)
+    layout.setContentsMargins(18, 16, 18, 16)
+    layout.setSpacing(10)
+    return frame, layout
 
 
 class ControlWindow(QMainWindow):
-    """Operator control dashboard."""
+    """Main operator dashboard."""
 
-    def __init__(
-        self,
-        audio_source: LiveAudioSource,
-        transcriber: WhisperTranscriber,
-        parser: ReferenceParser,
-        bible_provider: LocalSqliteBibleProvider,
-        verse_window: VerseDisplayWindow,
-    ) -> None:
+    def __init__(self, settings, transcriber, parser, bible, output: VerseDisplayWindow, startup_error: str = ""):
         super().__init__()
-        self.audio_source = audio_source
-        self.transcriber = transcriber
-        self.parser = parser
-        self.bible_provider = bible_provider
-        self.verse_window = verse_window
+        self.settings: Settings = settings
+        self.transcriber, self.parser, self.bible, self.output = transcriber, parser, bible, output
+        self.bridge = Bridge()
+        self.audio = LiveAudioSource(settings.input_device, settings.input_gain)
+        events = PipelineEvents(
+            status=self.bridge.status.emit,
+            transcript=self.bridge.transcript.emit,
+            suggestion=self.bridge.suggestion.emit,
+            error=self.bridge.error.emit,
+            debug=self.bridge.debug.emit,
+        )
+        self.pipeline = (
+            PipelineWorker(self.audio, transcriber, parser, bible, settings, events) if bible else None
+        )
+        self.pending: Optional[Suggestion] = None
+        self.on_air: Optional[Suggestion] = None
+        self._listening = False
+        self._transcript_chars = 0
 
-        self.pipeline_bridge = PipelineBridge()
-        self.pipeline_worker: Optional[PipelineWorker] = None
+        self.setWindowTitle("Vachan - Operator")
+        self.resize(1280, 800)
+        self.setMinimumSize(980, 640)
+        self._build()
+        self._connect()
+        self._set_suggestion(None)
+        self.transcript.setFocus()
+        if startup_error:
+            self._show_error(startup_error)
+        self._meter_timer = QTimer(self, interval=40, timeout=lambda: self.meter.set_level(self.audio.get_level()))
+        self._meter_timer.start()
+        if self.pipeline:
+            threading.Thread(target=self._preload_model, daemon=True).start()
 
-        self._pending_suggestion: Optional[ParseResult] = None
-        self._pending_text_en: str = ""
-        self._pending_text_hi: Optional[str] = None
-        self.auto_show_mode = False
+    # ------------------------------------------------------------------ layout
+    def _build(self) -> None:
+        root = QWidget()
+        outer = QVBoxLayout(root)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(self._build_header())
 
-        self._init_window()
-        self._init_ui()
-        self._connect_signals()
+        body = QVBoxLayout()
+        body.setContentsMargins(18, 14, 18, 10)
+        body.setSpacing(12)
+        self.banner, banner_layout = QFrame(), QHBoxLayout()
+        self.banner.setObjectName("Banner")
+        self.banner.setLayout(banner_layout)
+        banner_layout.setContentsMargins(14, 8, 8, 8)
+        self.banner_text = _label("", wrap=True)
+        banner_close = QPushButton("Dismiss")
+        banner_close.setObjectName("Ghost")
+        banner_close.clicked.connect(self.banner.hide)
+        banner_layout.addWidget(self.banner_text, 1)
+        banner_layout.addWidget(banner_close)
+        self.banner.hide()
+        body.addWidget(self.banner)
 
-        # Audio meter poll timer (runs at ~30 FPS on GUI thread)
-        self.meter_timer = QTimer(self)
-        self.meter_timer.timeout.connect(self._update_meter)
-        self.meter_timer.start(33)
+        left = QSplitter(Qt.Orientation.Vertical)
+        left.setChildrenCollapsible(False)
+        left.setHandleWidth(12)
+        left.addWidget(self._build_transcript())
+        left.addWidget(self._build_debug())
+        left.setStretchFactor(0, 3)
+        left.setStretchFactor(1, 2)
+        right = QScrollArea()
+        right.setWidgetResizable(True)
+        right.setFrameShape(QFrame.Shape.NoFrame)
+        right.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        right.setWidget(self._build_right())
+        right.setMinimumWidth(440)
+        split = QSplitter(Qt.Orientation.Horizontal)
+        split.setChildrenCollapsible(False)
+        split.setHandleWidth(12)
+        split.addWidget(left)
+        split.addWidget(right)
+        split.setStretchFactor(0, 5)
+        split.setStretchFactor(1, 4)
+        body.addWidget(split, 1)
+        outer.addLayout(body, 1)
+        outer.addWidget(self._build_footer())
+        self.setCentralWidget(root)
 
-    def _init_window(self) -> None:
-        self.setWindowTitle("Vachan - Operator Dashboard")
-        self.resize(1050, 720)
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #12131A;
-            }
-            QWidget {
-                color: #ECEFF4;
-                font-family: 'Segoe UI', 'Nirmala UI', sans-serif;
-                font-size: 14px;
-            }
-            QFrame#Panel {
-                background-color: #1A1C27;
-                border: 1px solid #282B3C;
-                border-radius: 12px;
-            }
-            QFrame#CardHighlight {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1E2336, stop:1 #22293F);
-                border: 1px solid #3D4A6E;
-                border-radius: 12px;
-            }
-            QPushButton {
-                background-color: #2E3440;
-                color: #ECEFF4;
-                border: 1px solid #434C5E;
-                border-radius: 8px;
-                padding: 8px 16px;
-                font-weight: 600;
-            }
-            QPushButton:hover {
-                background-color: #3B4252;
-                border-color: #5E81AC;
-            }
-            QPushButton#BtnStart {
-                background-color: #2E7D32;
-                border-color: #388E3C;
-                color: #FFFFFF;
-                font-size: 15px;
-                padding: 10px 24px;
-            }
-            QPushButton#BtnStart:hover {
-                background-color: #388E3C;
-            }
-            QPushButton#BtnStop {
-                background-color: #C62828;
-                border-color: #D32F2F;
-                color: #FFFFFF;
-                font-size: 15px;
-                padding: 10px 24px;
-            }
-            QPushButton#BtnShow {
-                background-color: #1976D2;
-                border-color: #2196F3;
-                color: #FFFFFF;
-                font-size: 14px;
-                padding: 8px 20px;
-            }
-            QPushButton#BtnDismiss {
-                background-color: #37474F;
-                border-color: #455A64;
-                color: #B0BEC5;
-                font-size: 14px;
-                padding: 8px 16px;
-            }
-            QComboBox, QLineEdit {
-                background-color: #1E2230;
-                border: 1px solid #3B4252;
-                border-radius: 6px;
-                padding: 6px 12px;
-                color: #ECEFF4;
-            }
-            QComboBox:hover, QLineEdit:focus {
-                border-color: #88C0D0;
-            }
-            QProgressBar {
-                background-color: #1E2230;
-                border: 1px solid #2E3440;
-                border-radius: 4px;
-                text-align: center;
-            }
-            QProgressBar::chunk {
-                background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #4CAF50, stop:0.8 #8BC34A, stop:1 #FFEB3B);
-                border-radius: 3px;
-            }
-            QTextEdit {
-                background-color: #151722;
-                border: 1px solid #282B3C;
-                border-radius: 8px;
-                padding: 12px;
-                color: #E5E9F0;
-                font-size: 16px;
-                line-height: 1.5;
-            }
-        """)
+    def _build_header(self) -> QFrame:
+        header = QFrame()
+        header.setObjectName("Header")
+        row = QHBoxLayout(header)
+        row.setContentsMargins(20, 12, 20, 12)
+        row.setSpacing(12)
+        logo = _label("वचन", "Title")
+        logo.setStyleSheet(f"color: {theme.ACCENT}; font-family: '{theme.SERIF_DEVA}'; font-size: 18pt;")
+        row.addWidget(logo)
+        row.addWidget(_label("Vachan", "Title"))
+        self.state_pill = _label("IDLE", "Badge")
+        row.addSpacing(6)
+        row.addWidget(self.state_pill)
+        row.addStretch(1)
+        row.addWidget(_label("Input", "Muted"))
+        self.mic_combo = QComboBox()
+        self.mic_combo.setMinimumWidth(240)
+        self.mic_combo.setMaximumWidth(340)
+        self._fill_devices()
+        row.addWidget(self.mic_combo)
+        self.meter = LevelMeter()
+        row.addWidget(self.meter)
+        row.addSpacing(6)
+        self.btn_output = QPushButton("Output window")
+        self.btn_output.setToolTip("Show / hide the broadcast window (F9)")
+        row.addWidget(self.btn_output)
+        self.btn_settings = QPushButton("Settings")
+        row.addWidget(self.btn_settings)
+        self.btn_listen = QPushButton("Start listening")
+        self.btn_listen.setObjectName("Start")
+        self.btn_listen.setToolTip("Start / stop speech recognition (F5)")
+        self.btn_listen.setEnabled(self.pipeline is not None)
+        row.addWidget(self.btn_listen)
+        return header
 
-    def _init_ui(self) -> None:
-        central = QWidget(self)
-        self.setCentralWidget(central)
-        root_layout = QVBoxLayout(central)
-        root_layout.setContentsMargins(20, 20, 20, 20)
-        root_layout.setSpacing(16)
+    def _build_transcript(self) -> QFrame:
+        card, lay = _card()
+        top = QHBoxLayout()
+        top.addWidget(_label("LIVE TRANSCRIPT", "Section"))
+        top.addStretch(1)
+        self.lang_label = _label("", "Muted")
+        top.addWidget(self.lang_label)
+        clear = QPushButton("Clear")
+        clear.setObjectName("Ghost")
+        clear.clicked.connect(self._clear_transcript)
+        top.addWidget(clear)
+        lay.addLayout(top)
+        self.transcript = QTextBrowser()
+        self.transcript.document().setMaximumBlockCount(400)  # bounded memory for long services
+        self.transcript.setStyleSheet(f"font-family: '{theme.UI_FONT}', '{theme.SANS_DEVA}'; font-size: 13pt;")
+        self.transcript.setPlaceholderText(
+            "Press Start listening. The preacher's words appear here, with detected references highlighted."
+        )
+        lay.addWidget(self.transcript, 1)
+        return card
 
-        # ---------------- Top Control Bar ----------------
-        top_bar = QFrame(self)
-        top_bar.setObjectName("Panel")
-        top_layout = QHBoxLayout(top_bar)
-        top_layout.setContentsMargins(16, 12, 16, 12)
-        top_layout.setSpacing(14)
+    def _build_right(self) -> QWidget:
+        col = QWidget()
+        lay = QVBoxLayout(col)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(12)
 
-        # Start / Stop Toggle Button
-        self.btn_toggle = QPushButton("▶ Start Listening", self)
-        self.btn_toggle.setObjectName("BtnStart")
-        self.btn_toggle.clicked.connect(self._toggle_listening)
-        top_layout.addWidget(self.btn_toggle)
+        self.sug_card, s = _card("Suggestion")
+        head = QHBoxLayout()
+        head.addWidget(_label("SUGGESTION", "Section"))
+        head.addStretch(1)
+        self.conf_badge = _label("", "Badge")
+        head.addWidget(self.conf_badge)
+        s.addLayout(head)
+        self.sug_ref = _label("", "RefBig")
+        s.addWidget(self.sug_ref)
+        self.sug_text = _label("", "VerseText", wrap=True)
+        self.sug_text_hi = _label("", "VerseTextHi", wrap=True)
+        for lbl in (self.sug_text, self.sug_text_hi):
+            lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+            lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        s.addWidget(self.sug_text)
+        s.addWidget(self.sug_text_hi)
+        self.sug_warn = _label("", "Warning", wrap=True)
+        s.addWidget(self.sug_warn)
+        btns = QHBoxLayout()
+        self.btn_show = QPushButton("Show on screen   Enter")
+        self.btn_show.setObjectName("Primary")
+        self.btn_dismiss = QPushButton("Dismiss   Esc")
+        btns.addWidget(self.btn_show, 3)
+        btns.addWidget(self.btn_dismiss, 2)
+        s.addLayout(btns)
+        lay.addWidget(self.sug_card)
 
-        # Microphone Dropdown
-        mic_label = QLabel("Microphone:", self)
-        mic_label.setStyleSheet("color: #88C0D0; font-weight: bold;")
-        top_layout.addWidget(mic_label)
+        air, a = _card()
+        row = QHBoxLayout()
+        dot = _label("●")
+        dot.setStyleSheet(f"color: {theme.RED}; font-size: 9pt;")
+        row.addWidget(dot)
+        row.addWidget(_label("ON SCREEN", "Section"))
+        self.air_label = _label("Nothing", "Muted")
+        row.addWidget(self.air_label, 1)
+        self.btn_clear_air = QPushButton("Clear screen   F8")
+        row.addWidget(self.btn_clear_air)
+        a.addLayout(row)
+        lay.addWidget(air)
 
-        self.mic_combo = QComboBox(self)
-        self._populate_devices()
-        self.mic_combo.currentIndexChanged.connect(self._change_device)
-        top_layout.addWidget(self.mic_combo, stretch=2)
+        ctl, c = _card()
+        c.addWidget(_label("FIND A VERSE", "Section"))
+        search_row = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("John 3:16  ·  यूहन्ना 3:16  ·  Rom 8 28      (Ctrl+F)")
+        self.btn_search = QPushButton("Find")
+        search_row.addWidget(self.search, 1)
+        search_row.addWidget(self.btn_search)
+        c.addLayout(search_row)
+        self.search_hint = _label("", "Muted")
+        self.search_hint.hide()
+        c.addWidget(self.search_hint)
+        c.addSpacing(4)
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(0)
+        mode_row.addWidget(_label("Mode", "Muted"))
+        mode_row.addSpacing(12)
+        self.mode_group = QButtonGroup(self)
+        for i, (text, tip) in enumerate(
+            [("Manual approve", "Every verse waits for Enter (recommended)"),
+             ("Auto-show", "Confident, warning-free verses go on screen immediately")]
+        ):  # fmt: skip
+            b = QPushButton(text)
+            b.setObjectName("Seg")
+            b.setCheckable(True)
+            b.setToolTip(tip)
+            radius = "border-top-left-radius: 8px; border-bottom-left-radius: 8px;" if i == 0 else (
+                "border-top-right-radius: 8px; border-bottom-right-radius: 8px;")
+            b.setStyleSheet(f"QPushButton#Seg {{ {radius} }}")
+            self.mode_group.addButton(b, i)
+            mode_row.addWidget(b)
+        self.mode_group.button(1 if self.settings.auto_show else 0).setChecked(True)
+        mode_row.addStretch(1)
+        c.addLayout(mode_row)
+        out_row = QHBoxLayout()
+        out_row.addWidget(_label("Output", "Muted"))
+        out_row.addSpacing(4)
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(list(THEMES))
+        self.theme_combo.setCurrentText(self.settings.theme)
+        out_row.addWidget(self.theme_combo, 1)
+        self.lang_combo = QComboBox()
+        for label, value in [("Both languages", "both"), ("Main only", "primary"), ("Second only", "secondary")]:
+            self.lang_combo.addItem(label, value)
+        self.lang_combo.setCurrentIndex(max(0, self.lang_combo.findData(self.settings.display_mode)))
+        out_row.addWidget(self.lang_combo, 1)
+        c.addLayout(out_row)
+        lay.addWidget(ctl)
 
-        # Audio Meter
-        meter_label = QLabel("Level:", self)
-        meter_label.setStyleSheet("color: #88C0D0; font-weight: bold;")
-        top_layout.addWidget(meter_label)
+        hist, h = _card()
+        h.addWidget(_label("SHOWN THIS SERVICE", "Section"))
+        self.history = QListWidget()
+        self.history.setToolTip("Double-click to load a verse again")
+        self.history.setMinimumHeight(150)
+        h.addWidget(self.history, 1)
+        lay.addWidget(hist, 1)
+        return col
 
-        self.audio_meter = QProgressBar(self)
-        self.audio_meter.setRange(0, 100)
-        self.audio_meter.setValue(0)
-        self.audio_meter.setFixedWidth(110)
-        self.audio_meter.setFixedHeight(18)
-        self.audio_meter.setTextVisible(False)
-        top_layout.addWidget(self.audio_meter)
+    def _build_debug(self) -> QFrame:
+        self.debug_panel, d = _card()
+        top = QHBoxLayout()
+        title = _label("PIPELINE DEBUG", "Section")
+        title.setToolTip("Every audio window: level, Whisper text, parser result. Also in logs/pipeline.log")
+        top.addWidget(title)
+        top.addStretch(1)
+        self.chk_save_audio = QCheckBox("Save audio")
+        self.chk_save_audio.setToolTip("Save the exact audio sent to Whisper to debug_audio/ (WAV)")
+        self.chk_save_audio.setChecked(self.settings.save_debug_audio)
+        top.addWidget(self.chk_save_audio)
+        open_logs = QPushButton("Logs")
+        open_logs.setToolTip("Open the logs folder")
+        open_logs.setObjectName("Ghost")
+        open_logs.clicked.connect(lambda: (LOGS_DIR.mkdir(exist_ok=True), os.startfile(LOGS_DIR)))
+        top.addWidget(open_logs)
+        d.addLayout(top)
+        self.debug_log = QPlainTextEdit()
+        self.debug_log.setReadOnly(True)
+        self.debug_log.setMaximumBlockCount(600)
+        self.debug_log.setMinimumHeight(90)
+        self.debug_log.setStyleSheet(
+            f"font-family: Consolas, '{theme.SANS_DEVA}'; font-size: 9pt; color: #A9C7A1; background: #0B0D12;"
+        )
+        d.addWidget(self.debug_log)
+        self.debug_panel.hide()
+        return self.debug_panel
 
-        # Gain control for quiet mics
-        gain_label = QLabel("Gain:", self)
-        gain_label.setStyleSheet("color: #88C0D0; font-weight: bold;")
-        top_layout.addWidget(gain_label)
+    def _build_footer(self) -> QFrame:
+        footer = QFrame()
+        footer.setObjectName("Header")
+        row = QHBoxLayout(footer)
+        row.setContentsMargins(20, 6, 12, 6)
+        self.status = _label("Ready", "Muted")
+        row.addWidget(self.status, 1)
+        self.engine_label = _label("", "Muted")
+        row.addWidget(self.engine_label)
+        self.btn_debug = QPushButton("Debug")
+        self.btn_debug.setObjectName("Ghost")
+        self.btn_debug.setCheckable(True)
+        row.addWidget(self.btn_debug)
+        return footer
 
-        self.gain_spin = QDoubleSpinBox(self)
-        self.gain_spin.setRange(0.5, 5.0)
-        self.gain_spin.setSingleStep(0.5)
-        self.gain_spin.setValue(self.audio_source.input_gain)
-        self.gain_spin.setSuffix("x")
-        self.gain_spin.setFixedWidth(68)
-        self.gain_spin.valueChanged.connect(self._change_gain)
-        top_layout.addWidget(self.gain_spin)
-
-        # Output Window Toggle Button
-        self.btn_verse_win = QPushButton("📺 Show Verse Screen", self)
-        self.btn_verse_win.clicked.connect(self._toggle_verse_window)
-        top_layout.addWidget(self.btn_verse_win)
-
-        # Debug Panel Toggle Button
-        self.btn_debug_toggle = QPushButton("🐞 Debug", self)
-        self.btn_debug_toggle.setCheckable(True)
-        self.btn_debug_toggle.clicked.connect(self._toggle_debug_panel)
-        top_layout.addWidget(self.btn_debug_toggle)
-
-        root_layout.addWidget(top_bar)
-
-        # ---------------- Main Splitter (Left: Transcript, Right: Suggestion & Search) ----------------
-        splitter = QSplitter(Qt.Orientation.Horizontal, self)
-        splitter.setHandleWidth(8)
-
-        # Left Panel: Live Rolling Transcript
-        transcript_panel = QFrame(splitter)
-        transcript_panel.setObjectName("Panel")
-        t_layout = QVBoxLayout(transcript_panel)
-        t_layout.setContentsMargins(16, 16, 16, 16)
-        t_layout.setSpacing(10)
-
-        t_title = QLabel("🎙 Live Preacher Transcript (Hindi + English)", transcript_panel)
-        t_title.setStyleSheet("font-size: 15px; font-weight: bold; color: #88C0D0;")
-        t_layout.addWidget(t_title)
-
-        self.transcript_box = QTextEdit(transcript_panel)
-        self.transcript_box.setReadOnly(True)
-        self.transcript_box.setFont(QFont("Nirmala UI", 16))
-        self.transcript_box.setPlaceholderText("Preacher words will stream in real-time as you speak into the microphone...")
-        t_layout.addWidget(self.transcript_box)
-
-        # Status Label
-        self.status_label = QLabel("Status: Idle. Click 'Start Listening' to begin speech recognition.", transcript_panel)
-        self.status_label.setStyleSheet("color: #81A1C1; font-size: 12px;")
-        t_layout.addWidget(self.status_label)
-
-        # Right Panel: Detected Verse Suggestion + Approval + Controls
-        right_panel = QFrame(splitter)
-        right_panel.setObjectName("Panel")
-        r_layout = QVBoxLayout(right_panel)
-        r_layout.setContentsMargins(18, 16, 18, 16)
-        r_layout.setSpacing(16)
-
-        # Header with Mode Toggle
-        mode_header = QHBoxLayout()
-        r_title = QLabel("📖 Detected Verse Suggestion", right_panel)
-        r_title.setStyleSheet("font-size: 15px; font-weight: bold; color: #EBCB8B;")
-        mode_header.addWidget(r_title)
-        mode_header.addStretch()
-
-        self.btn_manual_mode = QRadioButton("Manual (Enter)", right_panel)
-        self.btn_manual_mode.setChecked(True)
-        self.btn_manual_mode.toggled.connect(self._mode_changed)
-        mode_header.addWidget(self.btn_manual_mode)
-
-        self.btn_auto_mode = QRadioButton("Auto-Show", right_panel)
-        mode_header.addWidget(self.btn_auto_mode)
-        r_layout.addLayout(mode_header)
-
-        # Verse Suggestion Card
-        self.suggestion_card = QFrame(right_panel)
-        self.suggestion_card.setObjectName("CardHighlight")
-        sug_card_layout = QVBoxLayout(self.suggestion_card)
-        sug_card_layout.setContentsMargins(16, 14, 16, 14)
-        sug_card_layout.setSpacing(10)
-
-        self.sug_ref_label = QLabel("No reference detected yet", self.suggestion_card)
-        self.sug_ref_label.setStyleSheet("font-size: 17px; font-weight: bold; color: #E5A93C;")
-        sug_card_layout.addWidget(self.sug_ref_label)
-
-        self.sug_text_en = QLabel("Speak a reference like 'John 3:16' or 'यूहन्ना 3:16'...", self.suggestion_card)
-        self.sug_text_en.setWordWrap(True)
-        self.sug_text_en.setStyleSheet("color: #ECEFF4; font-size: 14px; line-height: 1.4;")
-        sug_card_layout.addWidget(self.sug_text_en)
-
-        self.sug_text_hi = QLabel("", self.suggestion_card)
-        self.sug_text_hi.setWordWrap(True)
-        self.sug_text_hi.setStyleSheet("color: #D8DEE9; font-size: 14px; font-family: 'Nirmala UI';")
-        sug_card_layout.addWidget(self.sug_text_hi)
-
-        # Action Buttons (Show / Dismiss)
-        btn_action_layout = QHBoxLayout()
-        self.btn_approve = QPushButton("✔ Show on Screen (Enter)", self.suggestion_card)
-        self.btn_approve.setObjectName("BtnShow")
-        self.btn_approve.clicked.connect(self._approve_verse)
-        btn_action_layout.addWidget(self.btn_approve)
-
-        self.btn_dismiss = QPushButton("✖ Dismiss (Esc)", self.suggestion_card)
-        self.btn_dismiss.setObjectName("BtnDismiss")
-        self.btn_dismiss.clicked.connect(self._dismiss_verse)
-        btn_action_layout.addWidget(self.btn_dismiss)
-        sug_card_layout.addLayout(btn_action_layout)
-
-        r_layout.addWidget(self.suggestion_card)
-
-        # Fallback Manual Search
-        search_label = QLabel("🔍 Manual Scripture Search Fallback:", right_panel)
-        search_label.setStyleSheet("color: #88C0D0; font-weight: bold;")
-        r_layout.addWidget(search_label)
-
-        search_box_layout = QHBoxLayout()
-        self.search_input = QLineEdit(right_panel)
-        self.search_input.setPlaceholderText("Type e.g. 'John 3:16', 'Romans 8:28', or 'यूहन्ना 3:16'...")
-        self.search_input.returnPressed.connect(self._perform_manual_search)
-        search_box_layout.addWidget(self.search_input)
-
-        btn_search = QPushButton("Lookup", right_panel)
-        btn_search.clicked.connect(self._perform_manual_search)
-        search_box_layout.addWidget(btn_search)
-        r_layout.addLayout(search_box_layout)
-
-        # Settings / Presentation Style
-        r_layout.addSpacing(10)
-        style_title = QLabel("🎨 Output Screen Presentation Settings:", right_panel)
-        style_title.setStyleSheet("color: #88C0D0; font-weight: bold;")
-        r_layout.addWidget(style_title)
-
-        style_row = QHBoxLayout()
-        theme_lbl = QLabel("Theme:", right_panel)
-        style_row.addWidget(theme_lbl)
-
-        self.theme_combo = QComboBox(right_panel)
-        for t in THEMES.keys():
-            self.theme_combo.addItem(t)
-        self.theme_combo.currentTextChanged.connect(self._change_theme)
-        style_row.addWidget(self.theme_combo)
-
-        lang_lbl = QLabel("Language:", right_panel)
-        style_row.addWidget(lang_lbl)
-
-        self.lang_combo = QComboBox(right_panel)
-        self.lang_combo.addItem("Both (Side-by-Side)", "both")
-        self.lang_combo.addItem("English Only", "english")
-        self.lang_combo.addItem("Hindi Only", "hindi")
-        self.lang_combo.currentIndexChanged.connect(self._change_language_mode)
-        style_row.addWidget(self.lang_combo)
-
-        r_layout.addLayout(style_row)
-        r_layout.addStretch()
-
-        splitter.addWidget(transcript_panel)
-        splitter.addWidget(right_panel)
-        splitter.setSizes([550, 450])
-        root_layout.addWidget(splitter)
-
-        # ---------------- Collapsible Debug Telemetry Panel ----------------
-        self.debug_panel = QFrame(self)
-        self.debug_panel.setObjectName("Panel")
-        self.debug_panel.setVisible(False)
-        d_layout = QVBoxLayout(self.debug_panel)
-        d_layout.setContentsMargins(14, 10, 14, 10)
-        d_layout.setSpacing(8)
-
-        d_header = QHBoxLayout()
-        d_title = QLabel("🐞 Pipeline Chunk Telemetry (logs/pipeline.log)", self.debug_panel)
-        d_title.setStyleSheet("font-weight: bold; color: #EBCB8B; font-size: 13px;")
-        d_header.addWidget(d_title)
-
-        self.chk_save_wav = QCheckBox("Save every audio chunk to debug_audio/ as .wav", self.debug_panel)
-        self.chk_save_wav.setStyleSheet("color: #D8DEE9; font-size: 13px;")
-        self.chk_save_wav.toggled.connect(self._toggle_save_wav)
-        d_header.addWidget(self.chk_save_wav)
-
-        d_header.addStretch()
-
-        self.btn_clear_debug = QPushButton("Clear Debug View", self.debug_panel)
-        self.btn_clear_debug.setStyleSheet("padding: 4px 10px; font-size: 12px;")
-        self.btn_clear_debug.clicked.connect(lambda: self.debug_log_box.clear())
-        d_header.addWidget(self.btn_clear_debug)
-
-        d_layout.addLayout(d_header)
-
-        self.debug_log_box = QTextEdit(self.debug_panel)
-        self.debug_log_box.setReadOnly(True)
-        self.debug_log_box.setFixedHeight(160)
-        self.debug_log_box.setStyleSheet("""
-            QTextEdit {
-                background-color: #0E1017;
-                color: #A3BE8C;
-                font-family: 'Consolas', 'Courier New', monospace;
-                font-size: 12px;
-                line-height: 1.3;
-                border: 1px solid #2E3440;
-                border-radius: 6px;
-            }
-        """)
-        d_layout.addWidget(self.debug_log_box)
-
-        root_layout.addWidget(self.debug_panel)
-
-    def _populate_devices(self) -> None:
-        """Enumerate audio devices into combo."""
-        devices = AudioDeviceManager.get_input_devices()
+    def _fill_devices(self) -> None:
+        self.mic_combo.blockSignals(True)
         self.mic_combo.clear()
-        target_index = 0
-        for i, dev in enumerate(devices):
-            self.mic_combo.addItem(f"[{dev['index']}] {dev['name']}", dev['index'])
-            # Prefer device index 1 as selected by user
-            if dev['index'] == 1:
-                target_index = i
+        try:
+            devices = list_input_devices()
+        except Exception as e:
+            log.exception("Device listing failed")
+            devices = []
+            self._show_error(f"Could not list audio devices: {e}")
+        self.mic_combo.addItem("Windows default input", "")
+        for d in devices:
+            self.mic_combo.addItem(d["name"] + ("  (default)" if d["is_default"] else ""), d["name"])
+        self.mic_combo.setCurrentIndex(max(0, self.mic_combo.findData(self.settings.input_device)))
+        self.mic_combo.blockSignals(False)
 
-        if self.mic_combo.count() > 0:
-            self.mic_combo.setCurrentIndex(target_index)
+    # ------------------------------------------------------------------ wiring
+    def _connect(self) -> None:
+        b = self.bridge
+        b.status.connect(self._on_status)
+        b.transcript.connect(self._on_transcript)
+        b.suggestion.connect(self._on_suggestion)
+        b.error.connect(self._show_error)
+        b.debug.connect(self._on_debug)
+        self.btn_listen.clicked.connect(self.toggle_listening)
+        self.btn_output.clicked.connect(self.toggle_output)
+        self.btn_settings.clicked.connect(self.open_settings)
+        self.btn_show.clicked.connect(self.approve)
+        self.btn_dismiss.clicked.connect(self.dismiss)
+        self.btn_clear_air.clicked.connect(self.clear_screen)
+        self.btn_search.clicked.connect(self.manual_search)
+        self.search.returnPressed.connect(self.manual_search)
+        self.btn_debug.toggled.connect(self.debug_panel.setVisible)
+        self.chk_save_audio.toggled.connect(lambda on: self._update_settings(save_debug_audio=on))
+        self.mode_group.idToggled.connect(lambda i, on: on and self._update_settings(auto_show=i == 1))
+        self.theme_combo.currentTextChanged.connect(self._change_theme)
+        self.lang_combo.currentIndexChanged.connect(self._change_display_mode)
+        self.mic_combo.currentIndexChanged.connect(self._change_device)
+        self.history.itemDoubleClicked.connect(lambda item: self._set_suggestion(item.data(Qt.ItemDataRole.UserRole)))
+        for key, handler in [
+            (Qt.Key.Key_Return, self._on_enter), (Qt.Key.Key_Enter, self._on_enter),
+            (Qt.Key.Key_Escape, self._on_escape), (Qt.Key.Key_F5, self.toggle_listening),
+            (Qt.Key.Key_F8, self.clear_screen), (Qt.Key.Key_F9, self.toggle_output),
+            (QKeySequence.StandardKey.Find, self.search.setFocus),
+        ]:  # fmt: skip
+            QShortcut(QKeySequence(key), self, activated=handler)
 
-    def _change_gain(self, val: float) -> None:
-        """Update audio input gain."""
-        self.audio_source.set_gain(val)
-        self.status_label.setText(f"Mic gain adjusted to {val:.1f}x")
+    def _update_settings(self, **changes) -> None:
+        for k, v in changes.items():
+            setattr(self.settings, k, v)
+        self._save_settings()
 
-    def _change_device(self, idx: int) -> None:
-        """Handle microphone selection change."""
-        dev_index = self.mic_combo.currentData()
-        if dev_index is not None:
-            self.audio_source.set_device(dev_index)
-            self.status_label.setText(
-                f"Audio device changed to [{dev_index}] {self.audio_source.active_device_name} "
-                f"({self.audio_source.active_sample_rate} Hz, {self.audio_source.channels}ch)"
-            )
+    def _save_settings(self) -> None:
+        try:
+            self.settings.save()
+        except OSError as e:
+            self._show_error(f"Could not save settings: {e}")
 
-    def _toggle_debug_panel(self) -> None:
-        """Show or hide debug telemetry panel."""
-        is_visible = self.debug_panel.isVisible()
-        self.debug_panel.setVisible(not is_visible)
-        self.btn_debug_toggle.setChecked(not is_visible)
-
-    def _toggle_save_wav(self, checked: bool) -> None:
-        """Dynamically enable or disable wav saving on active pipeline worker."""
-        if self.pipeline_worker:
-            self.pipeline_worker.save_debug_audio = checked
-            if checked:
-                self.pipeline_worker.debug_audio_dir.mkdir(parents=True, exist_ok=True)
-
-    def _connect_signals(self) -> None:
-        self.pipeline_bridge.transcript_received.connect(self._on_transcript_safe)
-        self.pipeline_bridge.verse_detected.connect(self._on_verse_detected_safe)
-        self.pipeline_bridge.error_occurred.connect(self._on_error_safe)
-        self.pipeline_bridge.debug_info_received.connect(self._on_debug_info_safe)
-
-    def _toggle_listening(self) -> None:
-        """Start or stop speech pipeline."""
-        if self.pipeline_worker and self.pipeline_worker._is_running:
-            # Stop
-            self.pipeline_worker.stop()
-            self.pipeline_worker = None
-            self.btn_toggle.setText("▶ Start Listening")
-            self.btn_toggle.setObjectName("BtnStart")
-            self.btn_toggle.setStyle(self.btn_toggle.style())
-            self.status_label.setText("Status: Stopped listening.")
+    # ------------------------------------------------------------------ actions
+    def toggle_listening(self) -> None:
+        """Start or stop the speech pipeline (F5)."""
+        if not self.pipeline:
+            return
+        if self._listening:
+            self.pipeline.stop()
+            self._set_listening(False)
+            self._on_status("Stopped")
         else:
-            # Start
-            dev_idx = self.mic_combo.currentData()
-            self.audio_source.device_index = dev_idx
+            self.banner.hide()
+            self.pipeline.start()
+            self._set_listening(True)
+            self._on_status("Starting...")
 
-            self.pipeline_worker = PipelineWorker(
-                audio_source=self.audio_source,
-                transcriber=self.transcriber,
-                parser=self.parser,
-                bible_provider=self.bible_provider,
-                default_version="KJV",
-                save_debug_audio=self.chk_save_wav.isChecked(),
-            )
-            # Route callbacks through Qt Signal Bridge
-            self.pipeline_worker.on_transcript = lambda t: self.pipeline_bridge.transcript_received.emit(t)
-            self.pipeline_worker.on_verse_detected = (
-                lambda res, en, hi: self.pipeline_bridge.verse_detected.emit(res, en, hi or "")
-            )
-            self.pipeline_worker.on_error = lambda err: self.pipeline_bridge.error_occurred.emit(err)
-            self.pipeline_worker.on_debug_chunk = lambda info: self.pipeline_bridge.debug_info_received.emit(info)
+    def _set_listening(self, on: bool) -> None:
+        self._listening = on
+        self.btn_listen.setText("Stop listening" if on else "Start listening")
+        self.btn_listen.setObjectName("Stop" if on else "Start")
+        self.btn_listen.style().unpolish(self.btn_listen)
+        self.btn_listen.style().polish(self.btn_listen)
+        color = theme.GREEN if on else theme.MUTED
+        self.state_pill.setText("LISTENING" if on else "IDLE")
+        self.state_pill.setStyleSheet(self._badge_css(color))
 
-            self.status_label.setText("Status: Initializing faster-whisper model (GPU/CPU)...")
-            self.btn_toggle.setText("⏹ Stop Listening")
-            self.btn_toggle.setObjectName("BtnStop")
-            self.btn_toggle.setStyle(self.btn_toggle.style())
+    def toggle_output(self) -> None:
+        """Show / hide the broadcast window (F9)."""
+        self.output.setVisible(not self.output.isVisible())
 
-            self.pipeline_worker.start()
-            self.status_label.setText(
-                f"Status: Listening live on {self.transcriber.active_device.upper()} | "
-                f"Device: [{self.audio_source.active_device_index}] {self.audio_source.active_device_name} "
-                f"({self.audio_source.active_sample_rate} Hz, {self.audio_source.channels}ch) | Gain: {self.audio_source.input_gain:.1f}x"
-            )
+    def approve(self) -> None:
+        """Put the pending suggestion on screen (Enter)."""
+        if self.pending is None:
+            return
+        s = self.pending
+        self.output.show_suggestion(s)
+        if not self.output.isVisible():
+            self.output.show()
+        self.on_air = s
+        if self.pipeline:
+            self.pipeline.set_context(s.reference)
+        self.air_label.setText(f"{s.reference.format_reference()}  ·  {s.primary.version}")
+        self.air_label.setObjectName("")
+        self.air_label.setStyleSheet(f"color: {theme.TEXT}; font-weight: 600;")
+        preview = s.primary.text if len(s.primary.text) < 42 else s.primary.text[:40].rsplit(" ", 1)[0] + "…"
+        item = QListWidgetItem(f"{s.reference.format_reference()}  ·  {s.primary.version}     {preview}")
+        item.setData(Qt.ItemDataRole.UserRole, s)
+        self.history.insertItem(0, item)
+        if self.history.count() > 200:
+            self.history.takeItem(200)
+        self._set_suggestion(None, keep_text="Shown on screen. Waiting for the next reference...")
 
-    def _update_meter(self) -> None:
-        """Refresh volume meter widget."""
-        lvl = self.audio_source.get_level()
-        pct = int(min(1.0, lvl) * 100)
-        self.audio_meter.setValue(pct)
+    def dismiss(self) -> None:
+        """Drop the pending suggestion (Esc)."""
+        if self.pending is not None:
+            self._set_suggestion(None, keep_text="Dismissed. Waiting for the next reference...")
 
-    def _toggle_verse_window(self) -> None:
-        """Open or hide output display window."""
-        if self.verse_window.isVisible():
-            self.verse_window.hide()
-            self.btn_verse_win.setText("📺 Show Verse Screen")
+    def clear_screen(self) -> None:
+        """Blank the broadcast output (F8)."""
+        self.output.clear()
+        self.on_air = None
+        self.air_label.setText("Nothing")
+        self.air_label.setStyleSheet(f"color: {theme.MUTED};")
+
+    def _on_enter(self) -> None:
+        if self.search.hasFocus():
+            self.manual_search()
         else:
-            self.verse_window.show()
-            self.btn_verse_win.setText("📺 Hide Verse Screen")
+            self.approve()
 
-    def _mode_changed(self) -> None:
-        self.auto_show_mode = self.btn_auto_mode.isChecked()
+    def _on_escape(self) -> None:
+        if self.search.hasFocus() and self.search.text():
+            self.search.clear()
+        else:
+            self.dismiss()
 
-    def _change_theme(self, theme_name: str) -> None:
-        self.verse_window.apply_theme(theme_name)
+    def manual_search(self) -> None:
+        """Typed reference -> suggestion card (never straight to air)."""
+        query = self.search.text().strip()
+        if not query or not self.pipeline:
+            return
+        ctx = self.on_air.reference if self.on_air else None
+        result = self.parser.parse(query, context_reference=ctx, typed=True)
+        if result is None or not result.is_valid:
+            why = "is not a real chapter/verse" if result else "was not recognised as a reference"
+            self._hint(f"'{query}' {why}. Try e.g. John 3:16 or यूहन्ना 3:16")
+            return
+        suggestion = self.pipeline.build_suggestion(result)
+        if suggestion is None:
+            self._hint(f"No text found for {result.reference.format_reference()}")
+            return
+        self.search_hint.hide()
+        self.search.clear()
+        self.search.clearFocus()
+        self._set_suggestion(suggestion)
 
-    def _change_language_mode(self, idx: int) -> None:
+    def _hint(self, text: str) -> None:
+        self.search_hint.setText(text)
+        self.search_hint.setStyleSheet(f"color: {theme.AMBER};")
+        self.search_hint.show()
+
+    def open_settings(self) -> None:
+        """Edit settings; reload the model if STT options changed."""
+        try:
+            devices = list_input_devices()
+        except Exception:
+            devices = []
+        versions = self.bible.versions() if self.bible else ["KJV"]
+        dialog = SettingsDialog(self.settings, devices, versions, self)
+        if not dialog.exec():
+            return
+        old = asdict(self.settings)
+        vars(self.settings).update(asdict(dialog.result_settings))  # shared with pipeline
+        self._save_settings()
+        self.audio.gain = self.settings.input_gain
+        self.audio.requested_device = self.settings.input_device
+        self.theme_combo.setCurrentText(self.settings.theme)
+        self.chk_save_audio.setChecked(self.settings.save_debug_audio)
+        self._fill_devices()
+        if any(old[f] != asdict(self.settings)[f] for f in STT_FIELDS):
+            self.transcriber.unload()
+            self._restart_if_listening()
+        elif old["input_device"] != self.settings.input_device:
+            self._restart_if_listening()
+
+    def _restart_if_listening(self) -> None:
+        if self._listening and self.pipeline:
+            self.pipeline.stop()
+            self.pipeline.start()
+
+    def _change_device(self) -> None:
+        self._update_settings(input_device=self.mic_combo.currentData())
+        self.audio.requested_device = self.settings.input_device
+        self._restart_if_listening()
+
+    def _change_theme(self, name: str) -> None:
+        self.output.set_theme(name)
+        self._update_settings(theme=name)
+
+    def _change_display_mode(self) -> None:
         mode = self.lang_combo.currentData()
-        self.verse_window.set_display_mode(mode)
+        self.output.set_display_mode(mode)
+        self._update_settings(display_mode=mode)
 
-    @Slot(str)
-    def _on_transcript_safe(self, text: str) -> None:
-        """Append live recognized speech to the transcript panel."""
-        self.transcript_box.append(f"• {text}")
-        # Auto-scroll to bottom
-        sb = self.transcript_box.verticalScrollBar()
-        sb.setValue(sb.maximum())
-        self.status_label.setText(f"Status: Active | Device: {self.transcriber.active_device.upper()} | Model: {self.transcriber.model_size}")
+    # ------------------------------------------------------------------ pipeline events
+    def _preload_model(self) -> None:
+        try:
+            self.transcriber.load(self.bridge.status.emit)
+        except Exception as e:
+            log.exception("Model preload failed")
+            self.bridge.error.emit(str(e))
+        self.bridge.status.emit("")
 
-    @Slot(object, str, str)
-    def _on_verse_detected_safe(self, parse_res: ParseResult, text_en: str, text_hi: str) -> None:
-        """Update suggestion card when a reference is detected."""
-        if not parse_res.reference:
-            return
+    def _on_status(self, text: str) -> None:
+        if text:
+            self.status.setText(text)
+            if text.startswith(("Listening on", "Audio restored")):
+                self.banner.hide()
+        t = self.transcriber
+        if t.device != "not loaded":
+            gpu = t.device == "cuda"
+            note = "" if gpu else f"  ·  {t.fallback_reason}" if t.fallback_reason else ""
+            self.engine_label.setText(f"Whisper {t.model_name} on {'GPU' if gpu else 'CPU'}{note}")
+            self.engine_label.setStyleSheet(f"color: {theme.GREEN if gpu else theme.AMBER};")
 
-        ref = parse_res.reference
-        ref_formatted = ref.format_reference(default_version="KJV")
+    def _show_error(self, text: str) -> None:
+        self.banner_text.setText(f"⚠  {text}")
+        self.banner.show()
+        self.status.setText(text)
+        if text.startswith(("Whisper model", "No microphone", "Could not open")) and self._listening:
+            self._set_listening(False)
 
-        self._pending_suggestion = parse_res
-        self._pending_text_en = text_en
-        self._pending_text_hi = text_hi
+    def _clear_transcript(self) -> None:
+        self.transcript.clear()
+        self._transcript_chars = 0
 
-        self.sug_ref_label.setText(f"✨ {ref_formatted} (Confidence: {parse_res.confidence * 100:.0f}%)")
-        self.sug_text_en.setText(text_en)
-        self.sug_text_hi.setText(text_hi if text_hi else "")
+    def _on_transcript(self, text: str, language: str) -> None:
+        cursor = self.transcript.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        if self._transcript_chars > 260 or self.transcript.document().isEmpty():
+            if not self.transcript.document().isEmpty():
+                cursor.insertBlock()
+            self._transcript_chars = 0
+        cursor.insertText(("" if self._transcript_chars == 0 else " ") + text)
+        self._transcript_chars += len(text)
+        self.transcript.setTextCursor(cursor)
+        self.transcript.ensureCursorVisible()
+        self.lang_label.setText({"hi": "हिंदी", "en": "English"}.get(language, language))
 
-        # Highlight detected reference chip in transcript
-        self.transcript_box.append(f"<span style='color: #E5A93C; font-weight: bold;'>[DETECTED REFERENCE: {ref_formatted}]</span>")
-        sb = self.transcript_box.verticalScrollBar()
-        sb.setValue(sb.maximum())
-
-        # If in auto-show mode, push immediately to output
-        if self.auto_show_mode and parse_res.confidence >= 0.80:
-            self._approve_verse()
-
-    @Slot(str)
-    def _on_error_safe(self, error_message: str) -> None:
-        self.status_label.setText(f"Notice: {error_message}")
-
-    @Slot(object)
-    def _on_debug_info_safe(self, info: ChunkDebugInfo) -> None:
-        """Display chunk telemetry in the debug panel."""
-        rms_color = "#A3BE8C" if info.rms >= 0.01 else "#D08770"
-        match_color = "#88C0D0" if "no match" not in info.parser_output.lower() else "#ECEFF4"
-        entry_html = (
-            f"<div style='margin-bottom: 4px;'>"
-            f"<span style='color: #81A1C1;'>[{info.timestamp}]</span> "
-            f"<b>RMS:</b> <span style='color: {rms_color};'>{info.rms:.4f}</span> | "
-            f"<b>Len:</b> {info.chunk_length_sec:.2f}s | "
-            f"<b>SR:</b> {info.sample_rate}Hz ({info.channels}ch) | "
-            f"<b>Lang:</b> <span style='color: #B48EAD;'>{info.detected_language}</span><br/>"
-            f"&nbsp;&nbsp;<b>Whisper:</b> <i>\"{info.raw_whisper_text}\"</i><br/>"
-            f"&nbsp;&nbsp;<b>To Parser:</b> \"{info.text_passed_to_parser}\"<br/>"
-            f"&nbsp;&nbsp;<b>Parser:</b> <span style='color: {match_color}; font-weight: bold;'>{info.parser_output}</span>"
+    def _on_suggestion(self, s: Suggestion) -> None:
+        cursor = self.transcript.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        chip = (
+            f"&nbsp;<span style='background-color:{theme.ACCENT_DIM}; color:{theme.ACCENT}; "
+            f"font-weight:600;'>&nbsp;{html.escape(s.reference.format_reference())}&nbsp;</span>&nbsp;"
         )
-        if info.audio_saved_path:
-            entry_html += f"<br/>&nbsp;&nbsp;<b>Saved WAV:</b> <span style='color: #EBCB8B;'>{info.audio_saved_path}</span>"
-        entry_html += "</div><hr style='border: 0; border-top: 1px solid #2E3440;'/>"
+        cursor.insertHtml(chip)
+        self.transcript.ensureCursorVisible()
+        if should_auto_show(s, self.settings):
+            self.pending = s
+            self.approve()
+            self.status.setText(f"Auto-shown {s.reference.format_reference()}")
+        else:
+            self._set_suggestion(s)
 
-        self.debug_log_box.append(entry_html)
-        sb = self.debug_log_box.verticalScrollBar()
-        sb.setValue(sb.maximum())
-
-    def _approve_verse(self) -> None:
-        """Push the currently pending suggestion to the output screen."""
-        if not self._pending_suggestion or not self._pending_suggestion.reference:
+    def _set_suggestion(self, s: Optional[Suggestion], keep_text: str = "") -> None:
+        self.pending = s
+        self.btn_show.setEnabled(s is not None)
+        self.btn_dismiss.setEnabled(s is not None)
+        if s is None:
+            self.sug_ref.setText("Listening for a reference" if self._listening else "No suggestion")
+            self.sug_ref.setStyleSheet(f"color: {theme.MUTED};")
+            self.sug_text.setText(keep_text or "Say e.g. “Turn to John chapter 3 verse 16”, “यूहन्ना 3 अध्याय 16 पद”"
+                                  " or “Romans ke aath adhyay mein 28 pad”, or type in Find a verse.")  # fmt: skip
+            self.sug_text.setStyleSheet(f"color: {theme.MUTED}; font-size: 10.5pt;")
+            self.sug_text_hi.hide()
+            self.sug_warn.hide()
+            self.conf_badge.hide()
+            self._card_state("")
             return
+        self.sug_ref.setText(f"{s.reference.format_reference()}  ·  {s.primary.version}")
+        self.sug_ref.setStyleSheet("")
+        self.sug_text.setStyleSheet("")
+        self.sug_text.setText(s.primary.text)
+        self.sug_text_hi.setVisible(s.secondary is not None)
+        if s.secondary:
+            self.sug_text_hi.setText(s.secondary.text)
+        warnings = [describe_warning(w) for w in s.warnings]
+        self.sug_warn.setText("\n".join(f"⚠  {w}" for w in warnings))
+        self.sug_warn.setVisible(bool(warnings))
+        conf = s.result.confidence
+        color = theme.GREEN if conf >= 0.9 and not warnings else theme.AMBER if conf >= 0.6 else theme.RED
+        self.conf_badge.setText(f"{conf * 100:.0f}%" if color == theme.GREEN else f"Review  ·  {conf * 100:.0f}%")
+        self.conf_badge.setStyleSheet(self._badge_css(color))
+        self.conf_badge.show()
+        self._card_state("active" if color == theme.GREEN else "warn")
 
-        ref = self._pending_suggestion.reference
-        ref_text = ref.format_reference(default_version="KJV")
+    @staticmethod
+    def _badge_css(color: str) -> str:
+        return f"background: {theme.tint(color, 34)}; color: {color}; border: 1px solid {theme.tint(color, 110)};"
 
-        self.verse_window.set_verse(
-            reference_text=ref_text,
-            text_en=self._pending_text_en,
-            text_hi=self._pending_text_hi,
+    def _card_state(self, state: str) -> None:
+        self.sug_card.setProperty("state", state)
+        self.sug_card.style().unpolish(self.sug_card)
+        self.sug_card.style().polish(self.sug_card)
+
+    def _on_debug(self, d: ChunkDebugInfo) -> None:
+        line = (
+            f"[{d.timestamp}] RMS {d.rms:.4f}  {d.device} {d.sample_rate}Hz  lang={d.detected_language} "
+            f"stt={d.stt_seconds:.2f}s\n   whisper: {d.raw_whisper_text!r}\n   parser:  {d.parser_output}"
         )
-        if not self.verse_window.isVisible():
-            self.verse_window.show()
-            self.btn_verse_win.setText("📺 Hide Verse Screen")
+        if d.audio_saved_path:
+            line += f"\n   audio:   {d.audio_saved_path}"
+        self.debug_log.appendPlainText(line)
 
-        # Update context for relative follow-up citations
-        if self.pipeline_worker:
-            self.pipeline_worker.set_context_reference(ref)
-
-        self.status_label.setText(f"Approved and sent to display: {ref_text}")
-
-    def _dismiss_verse(self) -> None:
-        """Dismiss current candidate suggestion."""
-        self._pending_suggestion = None
-        self._pending_text_en = ""
-        self._pending_text_hi = None
-        self.sug_ref_label.setText("Suggestion dismissed")
-        self.sug_text_en.setText("Waiting for next spoken citation...")
-        self.sug_text_hi.setText("")
-
-    def _perform_manual_search(self) -> None:
-        """Search manual input box."""
-        query = self.search_input.text().strip()
-        if not query:
-            return
-
-        res = self.parser.parse(query)
-        if res and res.is_valid and res.reference:
-            ref = res.reference
-            text_en = self.bible_provider.get_verse_text(
-                ref.book_id, ref.chapter, ref.verse_start, ref.verse_end, version="KJV"
-            )
-            text_hi = self.bible_provider.get_verse_text(
-                ref.book_id, ref.chapter, ref.verse_start, ref.verse_end, version="HIN_IRV"
-            )
-
-            if text_en:
-                self._on_verse_detected_safe(res, text_en, text_hi or "")
-                self.search_input.clear()
-        else:
-            self.status_label.setText(f"Manual search: No valid citation found in '{query}'")
-
-    def keyPressEvent(self, event: QKeyEvent) -> None:
-        """Keyboard shortcuts: Enter approves, Esc dismisses."""
-        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            self._approve_verse()
-            event.accept()
-        elif event.key() == Qt.Key.Key_Escape:
-            self._dismiss_verse()
-            event.accept()
-        else:
-            super().keyPressEvent(event)
-
-    def closeEvent(self, event) -> None:
-        """Clean shutdown of background threads and windows."""
-        if self.pipeline_worker:
-            self.pipeline_worker.stop()
-        self.verse_window.close()
+    def closeEvent(self, event) -> None:  # noqa: N802
+        """Stop threads and close the output window."""
+        if self.pipeline:
+            self.pipeline.stop(wait=3)
+        self._save_settings()
+        self.output.close()
         event.accept()
