@@ -1,8 +1,6 @@
-"""Domain models for Bible references, parsing results, and validation.
+"""Domain models. Pure Python: no GUI, audio or ML imports allowed here."""
 
-This module is part of the pure Python domain core (vachan/core).
-No external GUI, audio, or network dependencies are permitted here.
-"""
+from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
@@ -10,56 +8,102 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class BibleReference:
-    """Represents a canonical Bible scripture citation."""
+    """A canonical scripture citation."""
 
-    book_id: str             # e.g., "JHN", "ROM"
-    book_name: str           # Canonical English name, e.g., "John"
-    chapter: int             # e.g., 3
-    verse_start: int         # e.g., 16
-    verse_end: Optional[int] = None  # e.g., 18 for John 3:16-18
-    version: Optional[str] = None    # e.g., "ESV", "KJV", "NIV"
+    book_id: str  # USFM code, e.g. "JHN"
+    book_name: str  # English name, e.g. "John"
+    chapter: int
+    verse_start: int
+    verse_end: Optional[int] = None
+    version: Optional[str] = None  # translation spoken by the preacher, e.g. "ESV"
 
-    def format_reference(self, default_version: Optional[str] = None) -> str:
-        """Format as human-readable string: e.g. 'John 3:16' or 'Romans 8:28 (ESV)'."""
-        v = self.version or default_version
+    def format_reference(self) -> str:
+        """'John 3:16' or 'John 3:16-18'."""
+        verses = str(self.verse_start)
         if self.verse_end and self.verse_end != self.verse_start:
-            verse_part = f"{self.verse_start}-{self.verse_end}"
-        else:
-            verse_part = f"{self.verse_start}"
+            verses += f"-{self.verse_end}"
+        return f"{self.book_name} {self.chapter}:{verses}"
 
-        ref_str = f"{self.book_name} {self.chapter}:{verse_part}"
-        if v:
-            return f"{ref_str} ({v.upper()})"
-        return ref_str
+    @property
+    def key(self) -> tuple:
+        """Identity used for duplicate suppression (ignores version)."""
+        return (self.book_id, self.chapter, self.verse_start, self.verse_end)
 
 
 @dataclass(frozen=True)
 class ParseResult:
-    """Result of scripture reference extraction from a speech or text segment."""
+    """Outcome of reference extraction from a text snippet."""
 
     reference: Optional[BibleReference]
-    raw_match: str                   # Exact matched substring
-    confidence: float                # 0.0 to 1.0 confidence score
-    is_follow_up: bool = False       # True if resolved via relative reference ("next verse")
+    raw_match: str
+    confidence: float  # 0.0 - 1.0
+    is_follow_up: bool = False
     low_confidence_reasons: tuple[str, ...] = ()
 
     @property
     def is_valid(self) -> bool:
-        """True if a reference was detected with positive confidence."""
+        """True if a usable reference was found."""
         return self.reference is not None and self.confidence > 0.0
 
 
 @dataclass(frozen=True)
+class Passage:
+    """Verse text returned by a BibleProvider."""
+
+    verses: tuple[tuple[int, str], ...]  # (verse number, text)
+    version: str  # translation actually used
+    notice: str = ""  # e.g. "ESV is not available offline - showing KJV"
+
+    @property
+    def text(self) -> str:
+        """Plain text; verse numbers are prefixed only for ranges."""
+        if len(self.verses) == 1:
+            return self.verses[0][1]
+        return " ".join(f"{n} {t}" for n, t in self.verses)
+
+
+@dataclass(frozen=True)
+class Suggestion:
+    """A detected reference with its text, waiting for operator approval."""
+
+    result: ParseResult
+    primary: Passage
+    secondary: Optional[Passage] = None  # Hindi alongside English (or vice versa)
+
+    @property
+    def reference(self) -> BibleReference:
+        """The detected reference (always set for a suggestion)."""
+        assert self.result.reference is not None
+        return self.result.reference
+
+    @property
+    def warnings(self) -> tuple[str, ...]:
+        """Human-readable reasons to double-check before showing."""
+        notes = [p.notice for p in (self.primary, self.secondary) if p and p.notice]
+        return tuple(self.result.low_confidence_reasons) + tuple(notes)
+
+
+@dataclass(frozen=True)
+class Transcript:
+    """Output of a Transcriber for one audio window."""
+
+    text: str
+    language: str
+    seconds: float  # inference time
+
+
+@dataclass(frozen=True)
 class ChunkDebugInfo:
-    """Telemetry for an audio chunk processed through the pipeline."""
+    """Telemetry for one audio window processed by the pipeline."""
 
     timestamp: str
     rms: float
     chunk_length_sec: float
+    device: str
     sample_rate: int
-    channels: int
     raw_whisper_text: str
     detected_language: str
+    stt_seconds: float
     text_passed_to_parser: str
     parser_output: str
     audio_saved_path: Optional[str] = None
