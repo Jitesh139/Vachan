@@ -4,16 +4,22 @@ Decoupled from PySide6 GUI to prevent any UI freezing.
 Uses standard Python threading and thread-safe queues.
 """
 
+import logging
+from datetime import datetime
+from pathlib import Path
 import queue
 import threading
 from typing import Callable, Optional
+import wave
 import numpy as np
 
 from vachan.audio.source import LiveAudioSource
 from vachan.bible.provider import LocalSqliteBibleProvider
-from vachan.core.models import BibleReference, ParseResult
+from vachan.core.models import BibleReference, ChunkDebugInfo, ParseResult
 from vachan.parser.parser import ReferenceParser
 from vachan.stt.transcriber import WhisperTranscriber
+
+logger = logging.getLogger(__name__)
 
 
 class PipelineWorker:
@@ -26,12 +32,23 @@ class PipelineWorker:
         parser: ReferenceParser,
         bible_provider: LocalSqliteBibleProvider,
         default_version: str = "KJV",
+        logs_dir: Optional[Path] = None,
+        debug_audio_dir: Optional[Path] = None,
+        save_debug_audio: bool = False,
     ) -> None:
         self.audio_source = audio_source
         self.transcriber = transcriber
         self.parser = parser
         self.bible_provider = bible_provider
         self.default_version = default_version
+        self.logs_dir = logs_dir or Path("logs")
+        self.debug_audio_dir = debug_audio_dir or Path("debug_audio")
+        self.save_debug_audio = save_debug_audio
+
+        # Ensure directories exist
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        if self.save_debug_audio:
+            self.debug_audio_dir.mkdir(parents=True, exist_ok=True)
 
         # Threading & queues
         self._audio_queue: queue.Queue = queue.Queue(maxsize=15)
@@ -46,6 +63,7 @@ class PipelineWorker:
         self.on_transcript: Optional[Callable[[str], None]] = None
         self.on_verse_detected: Optional[Callable[[ParseResult, str, Optional[str]], None]] = None
         self.on_error: Optional[Callable[[str], None]] = None
+        self.on_debug_chunk: Optional[Callable[[ChunkDebugInfo], None]] = None
 
     def start(self) -> None:
         """Start background processing pipeline."""
@@ -88,6 +106,43 @@ class PipelineWorker:
             except Exception:
                 pass
 
+    def _save_chunk_wav(self, audio: np.ndarray, sample_rate: int) -> str:
+        """Save raw audio chunk to debug_audio/ folder as 16-bit PCM WAV."""
+        try:
+            self.debug_audio_dir.mkdir(parents=True, exist_ok=True)
+            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            filepath = self.debug_audio_dir / f"chunk_{timestamp_str}.wav"
+            clamped = np.clip(audio, -1.0, 1.0)
+            int16_data = (clamped * 32767).astype(np.int16)
+            with wave.open(str(filepath), "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sample_rate)
+                wf.writeframes(int16_data.tobytes())
+            return str(filepath)
+        except Exception as e:
+            logger.error(f"Failed to save debug audio: {e}")
+            return ""
+
+    def _log_debug_info(self, info: ChunkDebugInfo) -> None:
+        """Append chunk telemetry to logs/pipeline.log."""
+        try:
+            self.logs_dir.mkdir(parents=True, exist_ok=True)
+            log_path = self.logs_dir / "pipeline.log"
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(
+                    f"[{info.timestamp}] RMS={info.rms:.5f} | Len={info.chunk_length_sec:.2f}s | "
+                    f"SR={info.sample_rate}Hz | Ch={info.channels} | Lang={info.detected_language}\n"
+                    f"  Whisper Text:       \"{info.raw_whisper_text}\"\n"
+                    f"  Passed to Parser:   \"{info.text_passed_to_parser}\"\n"
+                    f"  Parser Result:      {info.parser_output}\n"
+                )
+                if info.audio_saved_path:
+                    f.write(f"  Debug Audio Saved:  {info.audio_saved_path}\n")
+                f.write("\n")
+        except Exception as e:
+            logger.error(f"Failed to write to pipeline log: {e}")
+
     def _process_loop(self) -> None:
         """Continuous worker loop running STT, parsing, and Bible retrieval."""
         while self._is_running:
@@ -100,38 +155,85 @@ class PipelineWorker:
                 break
 
             try:
-                # 1. Transcribe audio chunk
-                transcript = self.transcriber.transcribe(chunk)
-                if not transcript or not transcript.strip():
-                    continue
+                # Telemetry inputs
+                sr = getattr(self.audio_source, "sample_rate", 16000)
+                ch = getattr(self.audio_source, "channels", 1)
+                chunk_len_sec = round(len(chunk) / sr, 2) if sr > 0 else 0.0
+                rms = float(np.sqrt(np.mean(np.square(chunk)))) if len(chunk) > 0 else 0.0
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
-                if self.on_transcript:
-                    self.on_transcript(transcript)
+                # Save debug WAV if enabled
+                saved_wav_path = None
+                if self.save_debug_audio:
+                    saved_wav_path = self._save_chunk_wav(chunk, sr)
+
+                # 1. Transcribe audio chunk
+                if hasattr(self.transcriber, "transcribe_with_info"):
+                    transcript, detected_lang = self.transcriber.transcribe_with_info(chunk)
+                else:
+                    transcript = self.transcriber.transcribe(chunk)
+                    detected_lang = getattr(self.transcriber, "last_detected_language", "unknown")
+
+                # Text passed to parser
+                text_to_parse = transcript.strip() if transcript else ""
 
                 # 2. Parse scripture citation
-                with self._context_lock:
-                    ctx = self._context_reference
+                parse_res = None
+                parser_output_str = "no match: empty transcript"
 
-                parse_res = self.parser.parse(transcript, context_reference=ctx)
+                if text_to_parse:
+                    if self.on_transcript:
+                        self.on_transcript(text_to_parse)
 
+                    with self._context_lock:
+                        ctx = self._context_reference
+
+                    parse_res = self.parser.parse(text_to_parse, context_reference=ctx)
+
+                    if parse_res and parse_res.is_valid and parse_res.reference:
+                        ref_formatted = parse_res.reference.format_reference(default_version=self.default_version)
+                        parser_output_str = f"{ref_formatted} (conf={parse_res.confidence:.2f})"
+                    elif parse_res and parse_res.low_confidence_reasons:
+                        parser_output_str = f"no match: {', '.join(parse_res.low_confidence_reasons)}"
+                    else:
+                        parser_output_str = "no match: no citation recognized"
+
+                # Build ChunkDebugInfo and log
+                debug_info = ChunkDebugInfo(
+                    timestamp=now_str,
+                    rms=rms,
+                    chunk_length_sec=chunk_len_sec,
+                    sample_rate=sr,
+                    channels=ch,
+                    raw_whisper_text=transcript,
+                    detected_language=detected_lang,
+                    text_passed_to_parser=text_to_parse,
+                    parser_output=parser_output_str,
+                    audio_saved_path=saved_wav_path,
+                )
+
+                self._log_debug_info(debug_info)
+
+                if self.on_debug_chunk:
+                    self.on_debug_chunk(debug_info)
+
+                # 3. If valid verse citation detected, lookup Bible text
                 if parse_res and parse_res.is_valid and parse_res.reference:
                     ref = parse_res.reference
                     v_code = ref.version or self.default_version
 
-                    # 3. Lookup English & Hindi texts
                     text_primary = self.bible_provider.get_verse_text(
                         ref.book_id, ref.chapter, ref.verse_start, ref.verse_end, version=v_code
                     )
 
-                    # Lookup Hindi text for stacked display
                     text_hindi = self.bible_provider.get_verse_text(
                         ref.book_id, ref.chapter, ref.verse_start, ref.verse_end, version="HIN_IRV"
                     )
 
-                    if text_primary:
-                        if self.on_verse_detected:
-                            self.on_verse_detected(parse_res, text_primary, text_hindi)
+                    if text_primary and self.on_verse_detected:
+                        self.on_verse_detected(parse_res, text_primary, text_hindi)
 
             except Exception as e:
+                logger.exception("Error in pipeline process loop")
                 if self.on_error:
                     self.on_error(str(e))

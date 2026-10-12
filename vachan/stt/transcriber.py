@@ -90,24 +90,25 @@ class WhisperTranscriber:
                     self._init_error = str(cpu_err)
                     raise
 
-    def transcribe(self, audio_data: np.ndarray) -> str:
-        """Transcribe a mono float32 audio numpy array. Language is auto-detected."""
+        self.last_detected_language = "unknown"
+
+    def transcribe_with_info(self, audio_data: np.ndarray) -> tuple[str, str]:
+        """Transcribe a mono float32 audio numpy array and return (text, detected_language)."""
         if self._model is None:
             self.load_model()
 
         if self._model is None:
-            return ""
+            return "", "unknown"
 
         # Ensure float32 between -1.0 and 1.0
         if audio_data.dtype != np.float32:
             audio_data = audio_data.astype(np.float32)
 
         # Transcribe with faster-whisper without forcing language
-        # beam_size=1 or 2 for low latency in live stream chunks
         segments, info = self._model.transcribe(
             audio_data,
             beam_size=2,
-            language=None,  # Auto-detect language every chunk (code-switching Hindi+English)
+            language=None,  # Auto-detect language
             task="transcribe",
             vad_filter=True,
             vad_parameters=dict(min_silence_duration_ms=400),
@@ -119,4 +120,11 @@ class WhisperTranscriber:
             if clean:
                 texts.append(clean)
 
-        return " ".join(texts)
+        detected_lang = getattr(info, "language", "unknown") or "unknown"
+        self.last_detected_language = detected_lang
+        return " ".join(texts), detected_lang
+
+    def transcribe(self, audio_data: np.ndarray) -> str:
+        """Transcribe a mono float32 audio numpy array. Language is auto-detected."""
+        text, _ = self.transcribe_with_info(audio_data)
+        return text

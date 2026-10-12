@@ -15,6 +15,7 @@ from typing import Optional
 from PySide6.QtCore import QObject, QRect, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QFont, QIcon, QKeyEvent, QPainter
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -34,7 +35,7 @@ from PySide6.QtWidgets import (
 
 from vachan.audio.source import AudioDeviceManager, LiveAudioSource
 from vachan.bible.provider import LocalSqliteBibleProvider
-from vachan.core.models import BibleReference, ParseResult
+from vachan.core.models import BibleReference, ChunkDebugInfo, ParseResult
 from vachan.core.pipeline import PipelineWorker
 from vachan.output.verse_window import THEMES, VerseDisplayWindow
 from vachan.parser.parser import ReferenceParser
@@ -47,6 +48,7 @@ class PipelineBridge(QObject):
     transcript_received = Signal(str)
     verse_detected = Signal(object, str, str)  # ParseResult, text_en, text_hi
     error_occurred = Signal(str)
+    debug_info_received = Signal(object)  # ChunkDebugInfo
 
 
 class ControlWindow(QMainWindow):
@@ -228,6 +230,12 @@ class ControlWindow(QMainWindow):
         self.btn_verse_win.clicked.connect(self._toggle_verse_window)
         top_layout.addWidget(self.btn_verse_win)
 
+        # Debug Panel Toggle Button
+        self.btn_debug_toggle = QPushButton("🐞 Debug", self)
+        self.btn_debug_toggle.setCheckable(True)
+        self.btn_debug_toggle.clicked.connect(self._toggle_debug_panel)
+        top_layout.addWidget(self.btn_debug_toggle)
+
         root_layout.addWidget(top_bar)
 
         # ---------------- Main Splitter (Left: Transcript, Right: Suggestion & Search) ----------------
@@ -365,6 +373,51 @@ class ControlWindow(QMainWindow):
         splitter.setSizes([550, 450])
         root_layout.addWidget(splitter)
 
+        # ---------------- Collapsible Debug Telemetry Panel ----------------
+        self.debug_panel = QFrame(self)
+        self.debug_panel.setObjectName("Panel")
+        self.debug_panel.setVisible(False)
+        d_layout = QVBoxLayout(self.debug_panel)
+        d_layout.setContentsMargins(14, 10, 14, 10)
+        d_layout.setSpacing(8)
+
+        d_header = QHBoxLayout()
+        d_title = QLabel("🐞 Pipeline Chunk Telemetry (logs/pipeline.log)", self.debug_panel)
+        d_title.setStyleSheet("font-weight: bold; color: #EBCB8B; font-size: 13px;")
+        d_header.addWidget(d_title)
+
+        self.chk_save_wav = QCheckBox("Save every audio chunk to debug_audio/ as .wav", self.debug_panel)
+        self.chk_save_wav.setStyleSheet("color: #D8DEE9; font-size: 13px;")
+        self.chk_save_wav.toggled.connect(self._toggle_save_wav)
+        d_header.addWidget(self.chk_save_wav)
+
+        d_header.addStretch()
+
+        self.btn_clear_debug = QPushButton("Clear Debug View", self.debug_panel)
+        self.btn_clear_debug.setStyleSheet("padding: 4px 10px; font-size: 12px;")
+        self.btn_clear_debug.clicked.connect(lambda: self.debug_log_box.clear())
+        d_header.addWidget(self.btn_clear_debug)
+
+        d_layout.addLayout(d_header)
+
+        self.debug_log_box = QTextEdit(self.debug_panel)
+        self.debug_log_box.setReadOnly(True)
+        self.debug_log_box.setFixedHeight(160)
+        self.debug_log_box.setStyleSheet("""
+            QTextEdit {
+                background-color: #0E1017;
+                color: #A3BE8C;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 12px;
+                line-height: 1.3;
+                border: 1px solid #2E3440;
+                border-radius: 6px;
+            }
+        """)
+        d_layout.addWidget(self.debug_log_box)
+
+        root_layout.addWidget(self.debug_panel)
+
     def _populate_devices(self) -> None:
         """Enumerate audio devices into combo."""
         devices = AudioDeviceManager.get_input_devices()
@@ -386,10 +439,24 @@ class ControlWindow(QMainWindow):
             self.audio_source.set_device(dev_index)
             self.status_label.setText(f"Audio device changed to [{dev_index}]")
 
+    def _toggle_debug_panel(self) -> None:
+        """Show or hide debug telemetry panel."""
+        is_visible = self.debug_panel.isVisible()
+        self.debug_panel.setVisible(not is_visible)
+        self.btn_debug_toggle.setChecked(not is_visible)
+
+    def _toggle_save_wav(self, checked: bool) -> None:
+        """Dynamically enable or disable wav saving on active pipeline worker."""
+        if self.pipeline_worker:
+            self.pipeline_worker.save_debug_audio = checked
+            if checked:
+                self.pipeline_worker.debug_audio_dir.mkdir(parents=True, exist_ok=True)
+
     def _connect_signals(self) -> None:
         self.pipeline_bridge.transcript_received.connect(self._on_transcript_safe)
         self.pipeline_bridge.verse_detected.connect(self._on_verse_detected_safe)
         self.pipeline_bridge.error_occurred.connect(self._on_error_safe)
+        self.pipeline_bridge.debug_info_received.connect(self._on_debug_info_safe)
 
     def _toggle_listening(self) -> None:
         """Start or stop speech pipeline."""
@@ -412,6 +479,7 @@ class ControlWindow(QMainWindow):
                 parser=self.parser,
                 bible_provider=self.bible_provider,
                 default_version="KJV",
+                save_debug_audio=self.chk_save_wav.isChecked(),
             )
             # Route callbacks through Qt Signal Bridge
             self.pipeline_worker.on_transcript = lambda t: self.pipeline_bridge.transcript_received.emit(t)
@@ -419,6 +487,7 @@ class ControlWindow(QMainWindow):
                 lambda res, en, hi: self.pipeline_bridge.verse_detected.emit(res, en, hi or "")
             )
             self.pipeline_worker.on_error = lambda err: self.pipeline_bridge.error_occurred.emit(err)
+            self.pipeline_worker.on_debug_chunk = lambda info: self.pipeline_bridge.debug_info_received.emit(info)
 
             self.status_label.setText("Status: Initializing faster-whisper model (GPU/CPU)...")
             self.btn_toggle.setText("⏹ Stop Listening")
@@ -491,6 +560,30 @@ class ControlWindow(QMainWindow):
     @Slot(str)
     def _on_error_safe(self, error_message: str) -> None:
         self.status_label.setText(f"Notice: {error_message}")
+
+    @Slot(object)
+    def _on_debug_info_safe(self, info: ChunkDebugInfo) -> None:
+        """Display chunk telemetry in the debug panel."""
+        rms_color = "#A3BE8C" if info.rms >= 0.01 else "#D08770"
+        match_color = "#88C0D0" if "no match" not in info.parser_output.lower() else "#ECEFF4"
+        entry_html = (
+            f"<div style='margin-bottom: 4px;'>"
+            f"<span style='color: #81A1C1;'>[{info.timestamp}]</span> "
+            f"<b>RMS:</b> <span style='color: {rms_color};'>{info.rms:.4f}</span> | "
+            f"<b>Len:</b> {info.chunk_length_sec:.2f}s | "
+            f"<b>SR:</b> {info.sample_rate}Hz ({info.channels}ch) | "
+            f"<b>Lang:</b> <span style='color: #B48EAD;'>{info.detected_language}</span><br/>"
+            f"&nbsp;&nbsp;<b>Whisper:</b> <i>\"{info.raw_whisper_text}\"</i><br/>"
+            f"&nbsp;&nbsp;<b>To Parser:</b> \"{info.text_passed_to_parser}\"<br/>"
+            f"&nbsp;&nbsp;<b>Parser:</b> <span style='color: {match_color}; font-weight: bold;'>{info.parser_output}</span>"
+        )
+        if info.audio_saved_path:
+            entry_html += f"<br/>&nbsp;&nbsp;<b>Saved WAV:</b> <span style='color: #EBCB8B;'>{info.audio_saved_path}</span>"
+        entry_html += "</div><hr style='border: 0; border-top: 1px solid #2E3440;'/>"
+
+        self.debug_log_box.append(entry_html)
+        sb = self.debug_log_box.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
     def _approve_verse(self) -> None:
         """Push the currently pending suggestion to the output screen."""

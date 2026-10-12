@@ -47,3 +47,19 @@ class ParseResult:
     def is_valid(self) -> bool:
         """True if a reference was detected with positive confidence."""
         return self.reference is not None and self.confidence > 0.0
+
+
+@dataclass(frozen=True)
+class ChunkDebugInfo:
+    """Telemetry for an audio chunk processed through the pipeline."""
+
+    timestamp: str
+    rms: float
+    chunk_length_sec: float
+    sample_rate: int
+    channels: int
+    raw_whisper_text: str
+    detected_language: str
+    text_passed_to_parser: str
+    parser_output: str
+    audio_saved_path: Optional[str] = None

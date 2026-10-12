@@ -80,6 +80,8 @@ data/cache/
 
 # Audio recordings / temporary media
 recordings/
+debug_audio/
+logs/
 *.wav
 *.mp3
 *.m4a

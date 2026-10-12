@@ -44,6 +44,7 @@ class LiveAudioSource:
     ) -> None:
         self.device_index = device_index
         self.sample_rate = sample_rate
+        self.channels = 1
         self.chunk_duration_sec = chunk_duration_sec
         self.chunk_samples = int(self.sample_rate * self.chunk_duration_sec)
 
