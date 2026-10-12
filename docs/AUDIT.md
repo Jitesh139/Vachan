@@ -119,3 +119,23 @@ target is only reachable on the GPU.
 - CUDA on the RTX 5060 (Blackwell, sm_120): needs ctranslate2 ≥ 4.6 with CUDA 12.x cuBLAS + cuDNN 9.
   Cannot be tested on this machine.
 - Real microphone / church mixer input, Wirecast capture.
+
+## Resolution (same day)
+
+| ID | Fix | Proof |
+|---|---|---|
+| C1 | Pipeline rewritten (`core/pipeline.py`) | `tests/test_pipeline.py` (fake STT → suggestion) |
+| C2 | Full DB from eBible.org (`bible/builder.py`): KJV 31102/31102, HIN_IRV 31102/31102, ASV 31086, WEB 31095 | build output; 0.064 ms/lookup |
+| C3 | Number-free vocabulary prompt (`core/settings.py`), prompt-echo test | `test_parser_whisper.py::test_no_false_positive` |
+| C4 | hi/en-restricted detection with hysteresis | `scripts/test_speech.py` 8/8 on CPU small |
+| C5 | Normalizer + Devanagari aliases + observed mishearings | 91 Whisper-style parser tests |
+| C6 | Warm-up inference, CPU fallback incl. runtime CUDA errors, CUDA wheels | `test_failures.py` |
+| C7 | Settings-driven model/window/device | `settings.json` |
+| H1-H3 | Ring buffer at native rate, resample on worker, stall watchdog + auto-retry | `test_failures.py::test_mic_unplug_reported_and_recovered` |
+| H4-H7 | Two-window text buffer, last-reference wins, cooldowns, no queue backlog, speech excludes abbreviations | parser + pipeline tests |
+| H8 | Model preloaded at start with status/progress | UI footer |
+| H9 | Enter in search only searches; suggestions never go straight to air | `main_window._on_enter` |
+| H10 | Confidence recalibrated; auto-show needs ≥ 0.9 and no warnings | `core/approval.py` |
+| H11 | `Passage.notice` shown as warning | pipeline test `test_unavailable_version_falls_back_with_notice` |
+| H12-H13 | `run.bat` clean-clone flow, pinned requirements | clean-clone test |
+| M1-M10, L1-L8 | UI redesign, settings used, threads capped, logs rotate, ruff/black clean, README rewritten | screenshots, CI |

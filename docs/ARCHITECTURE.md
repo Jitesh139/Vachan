@@ -1,73 +1,63 @@
-# Vachan Architecture
+# Architecture
 
-This document outlines the system architecture and data processing pipeline for **Vachan**, an automated Bible reference detection and live stream display application.
+Ports and adapters. The domain core (`vachan/core`, `vachan/parser`) imports no Qt,
+faster-whisper or sounddevice; adapters implement the ports in `vachan/core/ports.py`.
 
----
-
-## 🏗 High-Level Pipeline
-
-```mermaid
-graph LR
-    A[Microphone / Line In] --> B[Audio Module]
-    B --> C[STT Module faster-whisper]
-    C --> D[Reference Parser Module]
-    D --> E[Bible Service SQLite / APIs]
-    E --> F[Operator UI PySide6]
-    F -->|Approve / Live| G[Output Window / Stream Overlay]
+```
+ Microphone/mixer ──► LiveAudioSource ──┐          (AudioSource)
+                     (ring buffer, 16k) │
+                                        ▼
+                         PipelineWorker (worker thread, every 1.5 s)
+                          │  newest 7 s window → VAD → WhisperTranscriber   (Transcriber)
+                          │  prev+current text → ReferenceParser            (ReferenceResolver)
+                          │  cooldown / follow-up / chapter-only checks
+                          │  LocalSqliteBibleProvider → Suggestion          (BibleProvider)
+                          ▼
+              PipelineEvents callbacks ──► Qt Bridge signals ──► ControlWindow
+                                                                   │ Enter / auto-show policy
+                                                                   ▼
+                                                     VerseDisplayWindow     (OutputSink)
 ```
 
-### Pipeline Flow:
-1. **Audio Capture (`vachan.audio`)**:
-   - Streams real-time audio chunks from the selected input device (e.g., soundboard, virtual audio cable, or microphone) using `sounddevice`.
-   - Normalizes audio format (16kHz, mono 16-bit PCM) and handles silence filtering.
+## Modules
 
-2. **Speech-to-Text (`vachan.stt`)**:
-   - Transcribes chunks in real-time using `faster-whisper` (CTranslate2).
-   - Optimized for code-switching (Hindi + English / Hinglish).
-   - Outputs rolling transcripts with timestamps.
+| Path | Role |
+|---|---|
+| `core/models.py` | `BibleReference`, `ParseResult`, `Passage`, `Suggestion`, `Transcript`, `ChunkDebugInfo` |
+| `core/ports.py` | Protocols: AudioSource, Transcriber, BibleProvider, ReferenceResolver, OutputSink |
+| `core/pipeline.py` | Worker thread: windowing, rolling text buffer, duplicate suppression, stall recovery, `logs/pipeline.log` |
+| `core/approval.py` | When auto-show is allowed; operator-friendly warning text |
+| `core/settings.py` | `settings.json` (per user, git-ignored) |
+| `parser/normalizer.py` | Whisper-output normalization, English/Hindi/Hinglish number parsing |
+| `parser/parser.py` | Token scanner: book aliases (exact then fuzzy), chapter/verse structure, follow-ups, confidence |
+| `parser/validator.py` | Chapter/verse bounds from `data/verse_counts.json` |
+| `audio/source.py` | sounddevice input (WASAPI, native rate, mono ring buffer); `FileAudioSource` for tests |
+| `stt/transcriber.py` | faster-whisper: GPU warm-up check, CPU fallback, model download progress, hi/en language choice |
+| `bible/provider.py`, `bible/builder.py` | SQLite lookups with KJV fallback; DB builder from eBible.org |
+| `ui/` , `output/` | PySide6 operator window, settings dialog, theme; broadcast window |
 
-3. **Reference Parser (`vachan.parser`)**:
-   - Analyzes transcribed text using regex, phonetic matching, and fuzzy search across canonical Bible books.
-   - Detects book names in Hindi (e.g., *उत्पत्ति*, *यूहन्ना*, *भजन संहिता*), Romanized transliteration (*Yuhanna*, *Bhajan Sanhita*), and English (*Genesis*, *John*, *Psalms*).
-   - Extracts chapter and verse numbers (supporting Hindi numerals and spoken number words).
+## Design decisions (and why)
 
-4. **Bible Verse Lookup (`vachan.bible`)**:
-   - Retrieves the full text of matched references from local SQLite databases (offline first).
-   - Supports switching translations (e.g., Hindi IRV, English ESV, KJV).
-   - Optional fallback to external scripture APIs (API.Bible, ESV API).
+- **Pull, not push, audio.** The PortAudio callback only copies samples into a ring buffer; the worker
+  pulls the newest 7 s every 1.5 s and resamples there. A slow transcription never queues stale audio:
+  the next step simply takes the newest window.
+- **Overlap instead of stitching.** A reference up to ~5 s long is always complete in some window.
+  The parser sees the previous + current window text, picks the *last* reference, and a 45 s cooldown
+  per reference removes repeats from overlapping windows. After a match the text buffer is cleared.
+- **Chapter-only matches wait one step** so "Turn to Romans 8 … verse 28" does not first suggest 8:1.
+- **Language per window restricted to Hindi/English** (Urdu probability counted as Hindi) with
+  hysteresis. Unrestricted detection turned Hindi speech into romanized gibberish (see AUDIT.md).
+- **Prompt without numbers.** Whisper sometimes echoes `initial_prompt`; a prompt containing
+  "Romans 8:28" produced that reference from unrelated speech.
+- **GPU verified by a warm-up inference** because missing cuBLAS/cuDNN DLLs only fail at the first
+  transcription, not at model load. CUDA errors at runtime (e.g. out of memory) switch to CPU.
+- **Abbreviations only for typed search.** "he", "am", "is" are book abbreviations but also common
+  words; in speech only full names / Hindi names / transliterations count.
+- **Opaque output window.** Translucent top-level windows capture as white/black in screen capture.
 
-5. **Operator Approval UI (`vachan.ui`)**:
-   - Operator dashboard built in PySide6 with dark mode styling.
-   - Displays real-time audio levels, live transcript stream, candidate verse cards, and history.
-   - Modes:
-     - **Semi-Automatic (Default)**: Operator reviews verse suggestions and clicks "Present" or uses hotkeys (Space/Enter).
-     - **Automatic Mode**: High-confidence detections are pushed directly to output after a customizable delay.
+## Threads
 
-6. **Output Window / Broadcast Overlay (`vachan.output`)**:
-   - Frameless, transparent overlay window designed for secondary monitors or screen capture in Wirecast/OBS/vMix.
-   - Configurable lower-third or full-screen scripture layout with customizable typography, colors, animations, and auto-dismiss timers.
-
----
-
-## 📂 Module Structure
-
-```text
-vachan/
-├── __init__.py
-├── audio/          # Device discovery, stream listener, audio ring buffer
-├── stt/            # Whisper model loader, worker threads, inference pipeline
-├── parser/         # Regex extractors, phonetic dictionaries, scripture matcher
-├── bible/          # SQLite manager, translation registry, API connectors
-├── output/         # Transparent overlay window, styling engine, NDI/OBS hook
-├── ui/             # PySide6 main window, operator cards, settings dialogs
-└── core/           # Event bus, configuration manager, logging, models
-```
-
----
-
-## ⚡ Concurrency & Threading Model
-
-- **GUI Thread (Main)**: Handles UI updates, Qt event loop, user interaction.
-- **Audio Worker Thread**: Background stream loop feeding raw audio frames into a ring buffer.
-- **STT Worker Thread**: Batches incoming audio frames and runs inference without blocking the UI.
-- **Parser & Lookup Thread**: Processes text snippets and queries SQLite asynchronously, emitting Qt signals (`Signal(DetectedVerse)`) back to the UI.
+GUI thread (Qt), PortAudio callback thread (copy only), pipeline worker thread (VAD, Whisper,
+parsing, SQLite), one-off model preload thread at start-up. Worker → GUI only via queued Qt
+signals. `stop()` never blocks the GUI; a quick Stop → Start cannot let the old worker close the
+new audio stream.
