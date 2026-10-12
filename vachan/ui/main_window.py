@@ -17,6 +17,7 @@ from PySide6.QtGui import QColor, QFont, QIcon, QKeyEvent, QPainter
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -220,10 +221,24 @@ class ControlWindow(QMainWindow):
         self.audio_meter = QProgressBar(self)
         self.audio_meter.setRange(0, 100)
         self.audio_meter.setValue(0)
-        self.audio_meter.setFixedWidth(130)
+        self.audio_meter.setFixedWidth(110)
         self.audio_meter.setFixedHeight(18)
         self.audio_meter.setTextVisible(False)
         top_layout.addWidget(self.audio_meter)
+
+        # Gain control for quiet mics
+        gain_label = QLabel("Gain:", self)
+        gain_label.setStyleSheet("color: #88C0D0; font-weight: bold;")
+        top_layout.addWidget(gain_label)
+
+        self.gain_spin = QDoubleSpinBox(self)
+        self.gain_spin.setRange(0.5, 5.0)
+        self.gain_spin.setSingleStep(0.5)
+        self.gain_spin.setValue(self.audio_source.input_gain)
+        self.gain_spin.setSuffix("x")
+        self.gain_spin.setFixedWidth(68)
+        self.gain_spin.valueChanged.connect(self._change_gain)
+        top_layout.addWidget(self.gain_spin)
 
         # Output Window Toggle Button
         self.btn_verse_win = QPushButton("📺 Show Verse Screen", self)
@@ -432,12 +447,20 @@ class ControlWindow(QMainWindow):
         if self.mic_combo.count() > 0:
             self.mic_combo.setCurrentIndex(target_index)
 
+    def _change_gain(self, val: float) -> None:
+        """Update audio input gain."""
+        self.audio_source.set_gain(val)
+        self.status_label.setText(f"Mic gain adjusted to {val:.1f}x")
+
     def _change_device(self, idx: int) -> None:
         """Handle microphone selection change."""
         dev_index = self.mic_combo.currentData()
         if dev_index is not None:
             self.audio_source.set_device(dev_index)
-            self.status_label.setText(f"Audio device changed to [{dev_index}]")
+            self.status_label.setText(
+                f"Audio device changed to [{dev_index}] {self.audio_source.active_device_name} "
+                f"({self.audio_source.active_sample_rate} Hz, {self.audio_source.channels}ch)"
+            )
 
     def _toggle_debug_panel(self) -> None:
         """Show or hide debug telemetry panel."""
@@ -495,7 +518,11 @@ class ControlWindow(QMainWindow):
             self.btn_toggle.setStyle(self.btn_toggle.style())
 
             self.pipeline_worker.start()
-            self.status_label.setText(f"Status: Listening live on {self.transcriber.active_device.upper()}...")
+            self.status_label.setText(
+                f"Status: Listening live on {self.transcriber.active_device.upper()} | "
+                f"Device: [{self.audio_source.active_device_index}] {self.audio_source.active_device_name} "
+                f"({self.audio_source.active_sample_rate} Hz, {self.audio_source.channels}ch) | Gain: {self.audio_source.input_gain:.1f}x"
+            )
 
     def _update_meter(self) -> None:
         """Refresh volume meter widget."""
