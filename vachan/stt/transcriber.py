@@ -1,170 +1,205 @@
-"""Speech-to-text transcriber implementing the Transcriber protocol using faster-whisper.
+"""faster-whisper adapter implementing the Transcriber port.
 
-Features:
-- Configurable model (default large-v3, small, medium, etc.)
-- GPU float16 execution with automatic fallback to CPU/int8
-- Automatic multi-lingual language detection (Hindi + English)
-- Non-blocking worker queue processing
+- GPU first (float16), verified with a warm-up inference: on Windows a missing
+  cuBLAS/cuDNN DLL only fails at the first transcribe, not at model load.
+- Falls back to CPU int8 with a smaller model, and again at runtime on CUDA errors
+  (e.g. GPU out of memory).
+- Downloads the model on first use with progress; clear error when offline.
+- Language: Hindi or English per window (detection restricted to those two; Urdu
+  probability counts as Hindi because they are acoustically the same).
 """
 
+from __future__ import annotations
+
 import logging
+import os
 import threading
-from typing import Optional
+import time
+from pathlib import Path
+from typing import Callable, Optional
+
 import numpy as np
 
-logger = logging.getLogger(__name__)
+from vachan.core.models import Transcript
+from vachan.core.settings import Settings
+
+log = logging.getLogger(__name__)
+Progress = Optional[Callable[[str], None]]
+
+
+class ModelUnavailable(RuntimeError):
+    """The Whisper model is not on disk and could not be downloaded."""
+
+
+def add_cuda_dll_dirs() -> None:
+    """Make pip-installed CUDA libraries (nvidia-cublas-cu12, nvidia-cudnn-cu12) loadable."""
+    import importlib.util
+
+    for pkg in ("nvidia.cublas", "nvidia.cudnn", "nvidia.cuda_runtime"):
+        try:
+            spec = importlib.util.find_spec(pkg)
+        except ModuleNotFoundError:
+            continue
+        for root in spec.submodule_search_locations if spec else []:
+            bin_dir = Path(root) / "bin"
+            if bin_dir.is_dir():
+                os.add_dll_directory(str(bin_dir))
+                os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
 
 
 class WhisperTranscriber:
-    """faster-whisper transcriber with GPU auto-detection, CPU fallback, and Bible biasing."""
+    """Transcriber backed by faster-whisper / CTranslate2."""
 
-    DEFAULT_INITIAL_PROMPT = (
-        "John 3:16, Romans 8:28, Psalm 23, Matthew chapter 5 verse 7, "
-        "यूहन्ना 3:16, रोमियों 8:28, भजन संहिता 23"
-    )
-
-    def __init__(
-        self,
-        model_size: str = "large-v3",
-        device: str = "auto",
-        compute_type: str = "default",
-        beam_size: int = 5,
-        vad_filter: bool = True,
-        initial_prompt: Optional[str] = None,
-        condition_on_previous_text: bool = False,
-        language: Optional[str] = None,
-    ) -> None:
-        self.model_size = model_size
-        self.requested_device = device
-        self.requested_compute_type = compute_type
-        self.beam_size = beam_size
-        self.vad_filter = vad_filter
-        self.initial_prompt = initial_prompt if initial_prompt is not None else self.DEFAULT_INITIAL_PROMPT
-        self.condition_on_previous_text = condition_on_previous_text
-        self.language = language
-        self.active_device = "cpu"
-        self.active_compute_type = "int8"
-
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.device = "not loaded"
+        self.model_name = ""
+        self.fallback_reason = ""  # why we are not on the GPU, shown in the UI
         self._model = None
         self._lock = threading.Lock()
-        self._init_error: Optional[str] = None
-        self.last_detected_language = "unknown"
-        self._language_history: list[str] = []
+        self._last_language = "en"
 
-    def load_model(self) -> None:
-        """Load or lazy-initialize the faster-whisper model."""
-        if self._model is not None:
-            return
-
+    # ------------------------------------------------------------------ loading
+    def load(self, progress: Progress = None) -> None:
+        """Load the best available model; safe to call repeatedly from any thread."""
         with self._lock:
-            if self._model is not None:
-                return
+            if self._model is None:
+                self._load(progress or (lambda msg: None))
 
-            from faster_whisper import WhisperModel
-            import ctranslate2
+    def unload(self) -> None:
+        """Drop the model so the next load() applies changed settings."""
+        with self._lock:
+            self._model = None
+            self.device = "not loaded"
 
-            # Determine best device
-            can_cuda = False
-            if self.requested_device in ("auto", "cuda"):
-                try:
-                    cuda_types = ctranslate2.get_supported_compute_types("cuda")
-                    can_cuda = len(cuda_types) > 0
-                except Exception:
-                    can_cuda = False
+    def _load(self, progress: Callable[[str], None]) -> None:
+        import ctranslate2
 
-            if can_cuda:
-                target_dev = "cuda"
-                target_comp = "float16" if self.requested_compute_type in ("default", "auto") else self.requested_compute_type
-            else:
-                target_dev = "cpu"
-                target_comp = "int8" if self.requested_compute_type in ("default", "auto") else self.requested_compute_type
-
+        want_gpu = self.settings.device in ("auto", "cuda")
+        if want_gpu:
+            add_cuda_dll_dirs()
             try:
-                logger.info(f"Loading faster-whisper model '{self.model_size}' on {target_dev} ({target_comp})...")
-                self._model = WhisperModel(
-                    self.model_size,
-                    device=target_dev,
-                    compute_type=target_comp,
-                    cpu_threads=4,
-                )
-                self.active_device = target_dev
-                self.active_compute_type = target_comp
-                self._init_error = None
-            except Exception as e:
-                logger.warning(f"Failed to load on {target_dev}: {e}. Falling back to CPU int8...")
-                # Fallback to CPU int8 if CUDA fails
-                try:
-                    self._model = WhisperModel(
-                        self.model_size,
-                        device="cpu",
-                        compute_type="int8",
-                        cpu_threads=4,
-                    )
-                    self.active_device = "cpu"
-                    self.active_compute_type = "int8"
-                    self._init_error = None
-                except Exception as cpu_err:
-                    self._init_error = str(cpu_err)
-                    raise
+                gpus = ctranslate2.get_cuda_device_count()
+            except Exception as e:  # driver too old / no CUDA runtime
+                gpus, self.fallback_reason = 0, f"CUDA unavailable: {e}"
+            if gpus:
+                for compute in ("float16", "int8_float16"):
+                    try:
+                        self._try_load(self.settings.model_gpu, "cuda", compute, progress)
+                        self.fallback_reason = ""
+                        return
+                    except ModelUnavailable:
+                        raise
+                    except Exception as e:
+                        log.warning("GPU load failed (%s): %s", compute, e)
+                        self.fallback_reason = f"GPU failed: {e}"
+            elif not self.fallback_reason:
+                self.fallback_reason = "No NVIDIA GPU detected"
+        self._try_load(self.settings.model_cpu, "cpu", "int8", progress)
 
-        self.last_detected_language = "unknown"
+    def _try_load(self, name: str, device: str, compute: str, progress: Callable) -> None:
+        from faster_whisper import WhisperModel
 
-    def transcribe_with_info(self, audio_data: np.ndarray, initial_prompt: Optional[str] = None) -> tuple[str, str]:
-        """Transcribe a mono float32 audio numpy array and return (text, detected_language)."""
-        if self._model is None:
-            self.load_model()
+        path = self._ensure_downloaded(name, progress)
+        progress(f"Loading Whisper '{name}' on {device.upper()} ({compute})...")
+        t0 = time.perf_counter()
+        threads = max(1, (os.cpu_count() or 4) // 2)
+        model = WhisperModel(path, device=device, compute_type=compute, cpu_threads=threads)
+        # warm-up: forces cuBLAS/cuDNN to load now, so failures trigger the CPU fallback
+        segments, _ = model.transcribe(np.zeros(16000, np.float32), language="en")
+        list(segments)
+        self._model, self.device, self.model_name = model, device, name
+        log.info("Whisper %s on %s/%s ready in %.1fs", name, device, compute, time.perf_counter() - t0)
+        progress(f"Whisper '{name}' ready on {device.upper()}")
 
-        if self._model is None:
-            return "", "unknown"
+    def _ensure_downloaded(self, name: str, progress: Callable[[str], None]) -> str:
+        from faster_whisper.utils import _MODELS, download_model
 
-        # Ensure float32 between -1.0 and 1.0
-        if audio_data.dtype != np.float32:
-            audio_data = audio_data.astype(np.float32)
+        try:
+            return download_model(name, local_files_only=True)
+        except Exception:
+            pass  # not cached yet
+        repo = _MODELS.get(name, name)
+        progress(f"Downloading Whisper '{name}' (first run only)...")
+        result: dict = {}
 
-        prompt = initial_prompt or self.initial_prompt
+        def worker() -> None:
+            try:
+                result["path"] = download_model(name)
+            except Exception as e:  # network errors surface below
+                result["error"] = e
 
-        # Transcribe with faster-whisper
-        segments, info = self._model.transcribe(
-            audio_data,
-            beam_size=self.beam_size,
-            language=self.language,  # None for auto-detect
-            task="transcribe",
-            vad_filter=self.vad_filter,
-            vad_parameters=dict(
-                min_silence_duration_ms=400,
-                threshold=0.5,
-                min_speech_duration_ms=250,
-                speech_pad_ms=200,
-            ),
-            initial_prompt=prompt,
-            condition_on_previous_text=self.condition_on_previous_text,
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        total = self._repo_size(repo)
+        cache = Path.home() / ".cache" / "huggingface" / "hub" / ("models--" + repo.replace("/", "--"))
+        while thread.is_alive():
+            thread.join(1.0)
+            done = sum(f.stat().st_size for f in cache.rglob("*") if f.is_file()) if cache.exists() else 0
+            pct = f" {min(99, done * 100 // total)}%" if total else ""
+            progress(f"Downloading Whisper '{name}'{pct} ({done / 1e6:.0f} MB)")
+        if "error" in result:
+            raise ModelUnavailable(
+                f"Whisper model '{name}' is not downloaded and the download failed "
+                f"({result['error']}). Connect to the internet once and press Start again."
+            )
+        return result["path"]
+
+    @staticmethod
+    def _repo_size(repo: str) -> int:
+        try:
+            from huggingface_hub import HfApi
+
+            info = HfApi().model_info(repo, files_metadata=True)
+            return sum(s.size or 0 for s in info.siblings if s.rfilename in ("model.bin",))
+        except Exception:
+            return 0
+
+    # ------------------------------------------------------------------ inference
+    def has_speech(self, audio: np.ndarray) -> bool:
+        """Silero VAD (bundled with faster-whisper); a few ms per window on CPU."""
+        from faster_whisper.vad import VadOptions, get_speech_timestamps
+
+        return bool(get_speech_timestamps(audio, VadOptions(min_speech_duration_ms=250)))
+
+    def transcribe(self, audio: np.ndarray) -> Transcript:
+        """Transcribe one window; on a CUDA runtime error switch to CPU and retry once."""
+        self.load()
+        try:
+            return self._transcribe(audio)
+        except RuntimeError as e:
+            if self.device != "cuda":
+                raise
+            log.exception("CUDA error during transcription; falling back to CPU")
+            with self._lock:
+                self._model = None
+                self.fallback_reason = f"GPU error ({e}); switched to CPU"
+                self._try_load(self.settings.model_cpu, "cpu", "int8", lambda m: None)
+            return self._transcribe(audio)
+
+    def _transcribe(self, audio: np.ndarray) -> Transcript:
+        t0 = time.perf_counter()
+        language = self._pick_language(audio)
+        segments, _ = self._model.transcribe(
+            audio.astype(np.float32, copy=False),
+            language=language,
+            beam_size=self.settings.beam_size,
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 500, "speech_pad_ms": 300},
+            initial_prompt=self.settings.initial_prompt or None,
+            condition_on_previous_text=False,
+            without_timestamps=True,
+            temperature=[0.0, 0.2, 0.4],
         )
+        text = " ".join(s.text.strip() for s in segments if s.no_speech_prob < 0.6)
+        return Transcript(text.strip(), language, time.perf_counter() - t0)
 
-        texts = []
-        for segment in segments:
-            clean = segment.text.strip()
-            if clean:
-                texts.append(clean)
-
-        raw_lang = getattr(info, "language", "unknown") or "unknown"
-        lang_prob = getattr(info, "language_probability", 1.0) or 1.0
-
-        # Stabilize language auto-detection between short chunks
-        if raw_lang in ("en", "hi", "ur"):
-            self._language_history.append(raw_lang)
-            if len(self._language_history) > 6:
-                self._language_history.pop(0)
-            detected_lang = raw_lang
-        elif self._language_history and (lang_prob < 0.70 or raw_lang not in ("en", "hi", "ur")):
-            # Fall back to majority language from recent stable window
-            detected_lang = max(set(self._language_history), key=self._language_history.count)
-        else:
-            detected_lang = raw_lang
-
-        self.last_detected_language = detected_lang
-        return " ".join(texts), detected_lang
-
-    def transcribe(self, audio_data: np.ndarray) -> str:
-        """Transcribe a mono float32 audio numpy array. Language is auto-detected."""
-        text, _ = self.transcribe_with_info(audio_data)
-        return text
+    def _pick_language(self, audio: np.ndarray) -> str:
+        if self.settings.language in ("hi", "en"):
+            return self.settings.language
+        _, _, probs = self._model.detect_language(audio, vad_filter=True)
+        p = dict(probs)
+        hindi, english = p.get("hi", 0.0) + p.get("ur", 0.0), p.get("en", 0.0)
+        if abs(hindi - english) >= 0.15:  # hysteresis: keep the last language when unsure
+            self._last_language = "hi" if hindi > english else "en"
+        return self._last_language

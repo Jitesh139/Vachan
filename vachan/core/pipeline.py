@@ -1,281 +1,310 @@
-"""Background pipeline worker that coordinates Audio -> STT -> Parser -> Bible lookup.
+"""Speech -> reference -> verse pipeline on a worker thread. Pure domain code: talks to
+audio, STT and Bible lookup only through the ports, and to the UI through callbacks.
 
-Decoupled from PySide6 GUI to prevent any UI freezing.
-Uses standard Python threading and thread-safe queues.
+Each step (1.5 s) the newest 7 s of audio is transcribed, so a spoken reference is
+always complete inside some window. The parser sees the previous + current window
+text (the rolling text buffer) and returns the newest reference; repeats of the same
+reference from overlapping windows are suppressed by a cooldown.
 """
 
+from __future__ import annotations
+
+import difflib
 import logging
-from datetime import datetime
-from pathlib import Path
-import queue
+import re
 import threading
-from typing import Callable, Optional
+import time
 import wave
+from collections import deque
+from dataclasses import dataclass, field
+from datetime import datetime
+from logging.handlers import RotatingFileHandler
+from typing import Callable, Optional
+
 import numpy as np
 
-from vachan.audio.source import LiveAudioSource
-from vachan.bible.provider import LocalSqliteBibleProvider
-from vachan.core.models import BibleReference, ChunkDebugInfo, ParseResult
-from vachan.parser.parser import ReferenceParser
-from vachan.stt.transcriber import WhisperTranscriber
+from vachan.core.models import BibleReference, ChunkDebugInfo, ParseResult, Suggestion
+from vachan.core.paths import DEBUG_AUDIO_DIR, LOGS_DIR
+from vachan.core.ports import AudioSource, BibleProvider, ReferenceResolver, Transcriber
+from vachan.core.settings import Settings
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
+STALL_SECONDS = 3.0  # no audio blocks for this long = device lost
+# Whole-transcript hallucinations Whisper produces on noise/music
+HALLUCINATIONS = {"thank you", "thanks for watching", "धन्यवाद", "subscribe", "you"}
+
+
+def _noop(*_args) -> None:
+    pass
+
+
+@dataclass
+class PipelineEvents:
+    """Callbacks to the UI; invoked on the worker thread."""
+
+    status: Callable[[str], None] = _noop
+    transcript: Callable[[str, str], None] = _noop  # new words, language
+    suggestion: Callable[[Suggestion], None] = _noop
+    error: Callable[[str], None] = _noop
+    debug: Callable[[ChunkDebugInfo], None] = _noop
+
+
+def new_words(previous: str, current: str) -> str:
+    """Words of `current` not already shown from the overlapping `previous` window."""
+    prev, cur = previous.split(), current.split()
+    if not prev:
+        return current
+
+    def norm(words: list[str]) -> list[str]:
+        return [re.sub(r"[^\wऀ-ॿ]", "", w.lower()) for w in words]
+
+    matcher = difflib.SequenceMatcher(None, norm(prev), norm(cur), autojunk=False)
+    blocks = [b for b in matcher.get_matching_blocks() if b.size >= 2]
+    if not blocks:
+        return current
+    last = max(blocks, key=lambda b: b.b + b.size)
+    return " ".join(cur[last.b + last.size :])
+
+
+def _pipeline_logger() -> logging.Logger:
+    logger = logging.getLogger("vachan.pipeline_trace")
+    if not logger.handlers:
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            LOGS_DIR / "pipeline.log", maxBytes=5_000_000, backupCount=3, encoding="utf-8"
+        )
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+    return logger
+
+
+@dataclass
+class _State:
+    context: Optional[BibleReference] = None
+    texts: deque = field(default_factory=lambda: deque(maxlen=2))
+    recent: dict = field(default_factory=dict)  # ref key -> time suggested
+    last_follow_up: float = 0.0
+    pending_chapter: Optional[tuple] = None  # chapter-only match awaiting a verse
+    shown_text: str = ""
 
 
 class PipelineWorker:
-    """Orchestrates live audio capture, transcription, parsing, and scripture lookup."""
+    """Owns the worker thread. start()/stop() are non-blocking and safe to repeat."""
 
     def __init__(
         self,
-        audio_source: LiveAudioSource,
-        transcriber: WhisperTranscriber,
-        parser: ReferenceParser,
-        bible_provider: LocalSqliteBibleProvider,
-        default_version: str = "KJV",
-        logs_dir: Optional[Path] = None,
-        debug_audio_dir: Optional[Path] = None,
-        save_debug_audio: bool = False,
+        audio: AudioSource,
+        transcriber: Transcriber,
+        parser: ReferenceResolver,
+        bible: BibleProvider,
+        settings: Settings,
+        events: Optional[PipelineEvents] = None,
     ) -> None:
-        self.audio_source = audio_source
-        self.transcriber = transcriber
-        self.parser = parser
-        self.bible_provider = bible_provider
-        self.default_version = default_version
-        self.logs_dir = logs_dir or Path("logs")
-        self.debug_audio_dir = debug_audio_dir or Path("debug_audio")
-        self.save_debug_audio = save_debug_audio
+        self.audio, self.transcriber, self.parser, self.bible = audio, transcriber, parser, bible
+        self.settings = settings
+        self.events = events or PipelineEvents()
+        self._state = _State()
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._trace = _pipeline_logger()
 
-        # Ensure directories exist
-        self.logs_dir.mkdir(parents=True, exist_ok=True)
-        if self.save_debug_audio:
-            self.debug_audio_dir.mkdir(parents=True, exist_ok=True)
-
-        # Threading & queues
-        self._audio_queue: queue.Queue = queue.Queue(maxsize=15)
-        self._is_running = False
-        self._worker_thread: Optional[threading.Thread] = None
-
-        # Tracking context for follow-up verses
-        self._context_reference: Optional[BibleReference] = None
-        self._context_lock = threading.Lock()
-
-        # Rolling transcript buffer (25-30s window)
-        self.buffer_window_seconds: float = 25.0
-        self._rolling_transcript_buffer: list[dict] = []
-        self._last_matched_ref_tuple: Optional[tuple] = None
-
-        # Callbacks dispatched to UI
-        self.on_transcript: Optional[Callable[[str], None]] = None
-        self.on_verse_detected: Optional[Callable[[ParseResult, str, Optional[str]], None]] = None
-        self.on_error: Optional[Callable[[str], None]] = None
-        self.on_debug_chunk: Optional[Callable[[ChunkDebugInfo], None]] = None
+    @property
+    def running(self) -> bool:
+        """True while the worker thread is alive."""
+        return self._thread is not None and self._thread.is_alive()
 
     def start(self) -> None:
-        """Start background processing pipeline."""
-        if self._is_running:
+        """Load the model (if needed), open audio and begin processing."""
+        if self.running and not self._stop.is_set():
             return
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, args=(self._stop,), daemon=True)
+        self._thread.start()
 
-        self._is_running = True
-        self._worker_thread = threading.Thread(target=self._process_loop, daemon=True)
-        self._worker_thread.start()
+    def stop(self, wait: float = 0.0) -> None:
+        """Signal the worker to finish; optionally wait for it."""
+        self._stop.set()
+        self.audio.stop()
+        if wait and self._thread:
+            self._thread.join(wait)
 
-        # Start live microphone capture feeding the queue
-        self.audio_source.start(self._on_audio_chunk)
+    def set_context(self, ref: Optional[BibleReference]) -> None:
+        """Reference last shown on screen; 'next verse' etc. are relative to it."""
+        with self._lock:
+            self._state.context = ref
 
-    def stop(self) -> None:
-        """Stop background processing pipeline."""
-        self._is_running = False
-        self.audio_source.stop()
-        # Wake worker loop with sentinel
-        self._audio_queue.put(None)
-        if self._worker_thread and self._worker_thread.is_alive():
-            self._worker_thread.join(timeout=1.0)
-        self._worker_thread = None
-
-    def set_context_reference(self, ref: Optional[BibleReference]) -> None:
-        """Update context reference for follow-ups."""
-        with self._context_lock:
-            self._context_reference = ref
-
-    def _on_audio_chunk(self, chunk: np.ndarray) -> None:
-        """Incoming audio chunk from sounddevice."""
-        if not self._is_running:
-            return
+    # ------------------------------------------------------------------ worker
+    def _run(self, stop: threading.Event) -> None:
         try:
-            self._audio_queue.put_nowait(chunk)
-        except queue.Full:
-            # Drop older frames if pipeline falls behind
+            self.transcriber.load(self.events.status)
+        except Exception as e:
+            log.exception("Model load failed")
+            self.events.error(str(e))
+            return
+        if not self._open_audio():
+            return
+        self.events.status(
+            f"Listening on {self.audio.device_name} - Whisper {self.transcriber.model_name} "
+            f"on {self.transcriber.device.upper()}"
+        )
+        errors = 0
+        next_tick = time.monotonic()
+        while not stop.is_set():
+            next_tick += self.settings.step_sec
+            stop.wait(max(0.0, next_tick - time.monotonic()))
+            next_tick = max(next_tick, time.monotonic())  # never queue up stale work
+            if stop.is_set():
+                break
+            if self.audio.seconds_since_audio() > STALL_SECONDS:
+                self._recover_audio(stop)
+                continue
             try:
-                _ = self._audio_queue.get_nowait()
-                self._audio_queue.put_nowait(chunk)
-            except Exception:
-                pass
+                self._tick()
+                errors = 0
+            except Exception as e:
+                errors += 1
+                log.exception("Pipeline step failed")
+                self.events.error(f"Processing error: {e}")
+                stop.wait(min(10.0, errors))  # back off, keep the service running
+        self.audio.stop()
 
-    def _save_chunk_wav(self, audio: np.ndarray, sample_rate: int) -> str:
-        """Save raw audio chunk to debug_audio/ folder as 16-bit PCM WAV."""
+    def _open_audio(self) -> bool:
         try:
-            self.debug_audio_dir.mkdir(parents=True, exist_ok=True)
-            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            filepath = self.debug_audio_dir / f"chunk_{timestamp_str}.wav"
-            clamped = np.clip(audio, -1.0, 1.0)
-            int16_data = (clamped * 32767).astype(np.int16)
-            with wave.open(str(filepath), "wb") as wf:
+            self.audio.start()
+            return True
+        except Exception as e:
+            log.exception("Audio open failed")
+            self.events.error(str(e))
+            return False
+
+    def _recover_audio(self, stop: threading.Event) -> None:
+        name = self.audio.device_name or "audio input"
+        self.events.error(f"No audio from '{name}' - is it unplugged? Retrying...")
+        while not stop.is_set():
+            try:
+                self.audio.start()
+                stop.wait(1.0)
+                if self.audio.seconds_since_audio() < STALL_SECONDS:
+                    self.events.status(f"Audio restored: {self.audio.device_name}")
+                    return
+            except Exception as e:
+                log.info("Audio retry failed: %s", e)
+            stop.wait(3.0)
+
+    def _tick(self) -> None:
+        s = self.settings
+        audio = self.audio.read_latest(s.window_sec)
+        if len(audio) < 16000:
+            return
+        rms = float(np.sqrt(np.mean(audio * audio)))
+        info = dict(
+            timestamp=datetime.now().strftime("%H:%M:%S.%f")[:-3],
+            rms=rms,
+            chunk_length_sec=len(audio) / 16000,
+            device=self.audio.device_name,
+            sample_rate=self.audio.sample_rate,
+        )
+        if rms < s.silence_rms or not self.transcriber.has_speech(audio):
+            self._emit_debug(info, "", "-", 0.0, "", "skipped: silence (no speech detected)")
+            return
+        saved = self._save_audio(audio) if s.save_debug_audio else None
+        t = self.transcriber.transcribe(audio)
+        text = t.text if t.text.lower().strip(" .!") not in HALLUCINATIONS else ""
+        result_line, suggestion = self._handle_text(text)
+        self._emit_debug(info, t.text, t.language, t.seconds, self._parse_text(), result_line, saved)
+        if text:
+            fresh = new_words(self._state.shown_text, text)
+            self._state.shown_text = text
+            if fresh:
+                self.events.transcript(fresh, t.language)
+        if suggestion:
+            self.events.suggestion(suggestion)
+
+    def _parse_text(self) -> str:
+        return " ".join(self._state.texts)
+
+    def _handle_text(self, text: str) -> tuple[str, Optional[Suggestion]]:
+        if not text:
+            return "no match: empty transcript", None
+        st = self._state
+        st.texts.append(text)
+        with self._lock:
+            context = st.context
+        result = self.parser.parse(self._parse_text(), context_reference=context)
+        if result is None:
+            return "no match: no Bible book name recognised", None
+        if not result.is_valid:
+            return f"no match: '{result.raw_match}' is not a real chapter/verse", None
+        ref = result.reference
+        now = time.monotonic()
+        label = f"{ref.format_reference()} (conf {result.confidence:.2f})"
+        if result.is_follow_up:
+            # the same "next verse" phrase stays inside overlapping windows for a while
+            if now - st.last_follow_up < self.settings.window_sec + self.settings.step_sec:
+                return f"duplicate follow-up ignored: {label}", None
+        elif now - st.recent.get(ref.key, -1e9) < self.settings.duplicate_cooldown_sec:
+            return f"duplicate ignored: {label}", None
+        if "chapter_only_default_verse_1" in result.low_confidence_reasons:
+            if st.pending_chapter != ref.key:  # the verse number may still be coming
+                st.pending_chapter = ref.key
+                return f"waiting for a verse number: {label}", None
+        st.pending_chapter = None
+        suggestion = self.build_suggestion(result)
+        if suggestion is None:
+            return f"no text in Bible database for {label}", None
+        st.recent = {k: v for k, v in st.recent.items() if now - v < 600}
+        st.recent[ref.key] = now
+        if result.is_follow_up:
+            st.last_follow_up = now
+        st.texts.clear()  # the matched words must not trigger again
+        return f"MATCH {label} {list(result.low_confidence_reasons)}", suggestion
+
+    def build_suggestion(self, result: ParseResult) -> Optional[Suggestion]:
+        """Attach verse text in the primary (+ secondary) translation."""
+        ref = result.reference
+        s = self.settings
+        primary = self.bible.get_passage(ref, ref.version or s.primary_version)
+        if primary is None:
+            return None
+        secondary = None
+        other = s.secondary_version if s.secondary_version != primary.version else s.primary_version
+        if other and other != primary.version:
+            secondary = self.bible.get_passage(ref, other)
+        return Suggestion(result, primary, secondary)
+
+    # ------------------------------------------------------------------ telemetry
+    def _emit_debug(self, info, raw, lang, secs, parsed, result, saved=None) -> None:
+        d = ChunkDebugInfo(
+            raw_whisper_text=raw,
+            detected_language=lang,
+            stt_seconds=secs,
+            text_passed_to_parser=parsed,
+            parser_output=result,
+            audio_saved_path=saved,
+            **info,
+        )
+        self._trace.info(
+            f"[{d.timestamp}] RMS={d.rms:.4f} len={d.chunk_length_sec:.1f}s "
+            f"device='{d.device}' {d.sample_rate}Hz lang={d.detected_language} "
+            f"stt={d.stt_seconds:.2f}s\n  whisper: {d.raw_whisper_text!r}\n"
+            f"  parser input: {d.text_passed_to_parser!r}\n  result: {d.parser_output}"
+            + (f"\n  audio: {saved}" if saved else "")
+        )
+        self.events.debug(d)
+
+    def _save_audio(self, audio: np.ndarray) -> Optional[str]:
+        try:
+            DEBUG_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+            path = DEBUG_AUDIO_DIR / f"window_{datetime.now():%Y%m%d_%H%M%S_%f}.wav"
+            with wave.open(str(path), "wb") as wf:
                 wf.setnchannels(1)
                 wf.setsampwidth(2)
-                wf.setframerate(sample_rate)
-                wf.writeframes(int16_data.tobytes())
-            return str(filepath)
-        except Exception as e:
-            logger.error(f"Failed to save debug audio: {e}")
-            return ""
-
-    def _log_debug_info(self, info: ChunkDebugInfo) -> None:
-        """Append chunk telemetry to logs/pipeline.log."""
-        try:
-            self.logs_dir.mkdir(parents=True, exist_ok=True)
-            log_path = self.logs_dir / "pipeline.log"
-            with open(log_path, "a", encoding="utf-8") as f:
-                f.write(
-                    f"[{info.timestamp}] RMS={info.rms:.5f} | Len={info.chunk_length_sec:.2f}s | "
-                    f"SR={info.sample_rate}Hz | Ch={info.channels} | Lang={info.detected_language}\n"
-                    f"  Whisper Text:       \"{info.raw_whisper_text}\"\n"
-                    f"  Passed to Parser:   \"{info.text_passed_to_parser}\"\n"
-                    f"  Parser Result:      {info.parser_output}\n"
-                )
-                if info.audio_saved_path:
-                    f.write(f"  Debug Audio Saved:  {info.audio_saved_path}\n")
-                f.write("\n")
-        except Exception as e:
-            logger.error(f"Failed to write to pipeline log: {e}")
-
-    def _process_loop(self) -> None:
-        """Continuous worker loop running STT, parsing, and Bible retrieval."""
-        while self._is_running:
-            try:
-                chunk = self._audio_queue.get(timeout=0.5)
-            except queue.Empty:
-                continue
-
-            if chunk is None or not self._is_running:
-                break
-
-            try:
-                # Telemetry inputs
-                sr = getattr(self.audio_source, "sample_rate", 16000)
-                ch = getattr(self.audio_source, "channels", 1)
-                chunk_len_sec = round(len(chunk) / sr, 2) if sr > 0 else 0.0
-                rms = float(np.sqrt(np.mean(np.square(chunk)))) if len(chunk) > 0 else 0.0
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-
-                # Save debug WAV if enabled
-                saved_wav_path = None
-                if self.save_debug_audio:
-                    saved_wav_path = self._save_chunk_wav(chunk, sr)
-
-                # 1. Transcribe audio chunk
-                if hasattr(self.transcriber, "transcribe_with_info"):
-                    transcript, detected_lang = self.transcriber.transcribe_with_info(chunk)
-                else:
-                    transcript = self.transcriber.transcribe(chunk)
-                    detected_lang = getattr(self.transcriber, "last_detected_language", "unknown")
-
-                # Text passed to parser
-                text_to_parse = transcript.strip() if transcript else ""
-
-                # 2. Update rolling text buffer & parse
-                raw_chunk_text = transcript.strip() if transcript else ""
-                now_epoch = time.time()
-
-                if raw_chunk_text:
-                    if self.on_transcript:
-                        self.on_transcript(raw_chunk_text)
-
-                    # Append to rolling transcript buffer
-                    self._rolling_transcript_buffer.append({"text": raw_chunk_text, "time": now_epoch})
-
-                # Prune buffer older than buffer_window_seconds (25.0s)
-                cutoff_time = now_epoch - self.buffer_window_seconds
-                self._rolling_transcript_buffer = [
-                    item for item in self._rolling_transcript_buffer if item["time"] >= cutoff_time
-                ]
-
-                # Combine buffer text
-                combined_buffer_text = " ".join(item["text"] for item in self._rolling_transcript_buffer).strip()
-
-                parse_res = None
-                parser_output_str = "no match: empty transcript"
-
-                if combined_buffer_text:
-                    with self._context_lock:
-                        ctx = self._context_reference
-
-                    parse_res = self.parser.parse(combined_buffer_text, context_reference=ctx)
-
-                    if parse_res and parse_res.is_valid and parse_res.reference:
-                        ref = parse_res.reference
-                        ref_tuple = (ref.book_id, ref.chapter, ref.verse_start, ref.verse_end)
-                        ref_formatted = ref.format_reference(default_version=self.default_version)
-
-                        # Check if duplicate of immediately previous match
-                        if ref_tuple == self._last_matched_ref_tuple:
-                            parser_output_str = f"already suggested: {ref_formatted}"
-                            # Do not re-emit duplicate suggestion
-                            parse_res = None
-                        else:
-                            self._last_matched_ref_tuple = ref_tuple
-                            parser_output_str = f"{ref_formatted} (conf={parse_res.confidence:.2f})"
-
-                            # CONSUME the matched portion from rolling buffer so it isn't suggested twice
-                            raw_matched = parse_res.raw_match
-                            matched_idx = combined_buffer_text.lower().find(raw_matched.lower())
-                            if matched_idx != -1:
-                                remainder_text = combined_buffer_text[matched_idx + len(raw_matched):].strip()
-                                if remainder_text:
-                                    self._rolling_transcript_buffer = [{"text": remainder_text, "time": now_epoch}]
-                                else:
-                                    self._rolling_transcript_buffer = []
-
-                    elif parse_res and parse_res.low_confidence_reasons:
-                        parser_output_str = f"no match: {', '.join(parse_res.low_confidence_reasons)}"
-                    else:
-                        parser_output_str = "no match: no citation recognized"
-
-                # Build ChunkDebugInfo and log
-                debug_info = ChunkDebugInfo(
-                    timestamp=now_str,
-                    rms=rms,
-                    chunk_length_sec=chunk_len_sec,
-                    sample_rate=sr,
-                    channels=ch,
-                    raw_whisper_text=raw_chunk_text,
-                    detected_language=detected_lang,
-                    text_passed_to_parser=combined_buffer_text,
-                    parser_output=parser_output_str,
-                    audio_saved_path=saved_wav_path,
-                )
-
-                self._log_debug_info(debug_info)
-
-                if self.on_debug_chunk:
-                    self.on_debug_chunk(debug_info)
-
-                # 3. If valid verse citation detected, lookup Bible text
-                if parse_res and parse_res.is_valid and parse_res.reference:
-                    ref = parse_res.reference
-                    v_code = ref.version or self.default_version
-
-                    text_primary = self.bible_provider.get_verse_text(
-                        ref.book_id, ref.chapter, ref.verse_start, ref.verse_end, version=v_code
-                    )
-
-                    text_hindi = self.bible_provider.get_verse_text(
-                        ref.book_id, ref.chapter, ref.verse_start, ref.verse_end, version="HIN_IRV"
-                    )
-
-                    if text_primary and self.on_verse_detected:
-                        self.on_verse_detected(parse_res, text_primary, text_hindi)
-
-            except Exception as e:
-                logger.exception("Error in pipeline process loop")
-                if self.on_error:
-                    self.on_error(str(e))
+                wf.setframerate(16000)
+                wf.writeframes((np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes())
+            return str(path)
+        except OSError as e:
+            log.warning("Could not save debug audio: %s", e)
+            return None
