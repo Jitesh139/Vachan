@@ -40,7 +40,8 @@ class LiveAudioSource:
         self,
         device_index: Optional[int] = None,
         sample_rate: int = 16000,
-        chunk_duration_sec: float = 2.5,
+        chunk_duration_sec: float = 7.0,
+        step_duration_sec: float = 2.0,
         input_gain: float = 1.0,
         enable_normalization: bool = True,
     ) -> None:
@@ -49,7 +50,9 @@ class LiveAudioSource:
         self.target_sample_rate = 16000
         self.channels = 1
         self.chunk_duration_sec = chunk_duration_sec
-        self.chunk_samples = int(self.sample_rate * self.chunk_duration_sec)
+        self.step_duration_sec = step_duration_sec
+        self.window_samples = int(self.sample_rate * self.chunk_duration_sec)
+        self.step_samples = int(self.sample_rate * self.step_duration_sec)
         self.input_gain = input_gain
         self.enable_normalization = enable_normalization
 
@@ -63,9 +66,10 @@ class LiveAudioSource:
         self._current_level = 0.0
         self._level_lock = threading.Lock()
 
-        # Buffer for accumulating audio until chunk_samples is reached
+        # Rolling buffer for accumulating audio until chunk_samples is reached
         self._buffer: List[np.ndarray] = []
         self._accumulated_samples = 0
+        self._samples_since_step = 0
         self._buffer_lock = threading.Lock()
 
     def set_device(self, device_index: Optional[int]) -> None:
@@ -152,28 +156,32 @@ class LiveAudioSource:
         with self._level_lock:
             self._current_level = 0.7 * self._current_level + 0.3 * normalized_level
 
-        # Accumulate samples for STT
+        # Accumulate samples for rolling STT window
         with self._buffer_lock:
             self._buffer.append(audio_mono)
             self._accumulated_samples += len(audio_mono)
+            self._samples_since_step += len(audio_mono)
 
-            if self._accumulated_samples >= self.chunk_samples:
-                full_chunk = np.concatenate(self._buffer)
-                # Keep rolling overlap of last 0.5s
-                overlap_samples = int(self.sample_rate * 0.5)
-                if len(full_chunk) > overlap_samples:
-                    self._buffer = [full_chunk[-overlap_samples:]]
-                    self._accumulated_samples = overlap_samples
+            # Trigger when step_samples reached and we have at least 2.0s of speech
+            min_initial_samples = int(self.sample_rate * 2.0)
+            if self._samples_since_step >= self.step_samples and self._accumulated_samples >= min_initial_samples:
+                full_audio = np.concatenate(self._buffer)
+                if len(full_audio) > self.window_samples:
+                    window_audio = full_audio[-self.window_samples:]
+                    # Retain window_samples in buffer
+                    self._buffer = [window_audio]
+                    self._accumulated_samples = self.window_samples
                 else:
-                    self._buffer = []
-                    self._accumulated_samples = 0
+                    window_audio = full_audio
+
+                self._samples_since_step = 0
 
                 if self._callback:
                     # Resample if stream sample rate is not 16000
                     if self.sample_rate != self.target_sample_rate:
-                        ready_chunk = self._resample(full_chunk, self.sample_rate, self.target_sample_rate)
+                        ready_chunk = self._resample(window_audio, self.sample_rate, self.target_sample_rate)
                     else:
-                        ready_chunk = full_chunk
+                        ready_chunk = window_audio.copy()
 
                     # Apply mic gain and normalization
                     ready_chunk = self._normalize_audio(ready_chunk)
@@ -188,9 +196,12 @@ class LiveAudioSource:
 
         self._callback = callback
         self._is_running = True
+        self.window_samples = int(self.sample_rate * self.chunk_duration_sec)
+        self.step_samples = int(self.sample_rate * self.step_duration_sec)
         with self._buffer_lock:
             self._buffer = []
             self._accumulated_samples = 0
+            self._samples_since_step = 0
 
         # Query device info for channels and default samplerate
         dev_channels = 1
