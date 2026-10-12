@@ -59,6 +59,11 @@ class PipelineWorker:
         self._context_reference: Optional[BibleReference] = None
         self._context_lock = threading.Lock()
 
+        # Rolling transcript buffer (25-30s window)
+        self.buffer_window_seconds: float = 25.0
+        self._rolling_transcript_buffer: list[dict] = []
+        self._last_matched_ref_tuple: Optional[tuple] = None
+
         # Callbacks dispatched to UI
         self.on_transcript: Optional[Callable[[str], None]] = None
         self.on_verse_detected: Optional[Callable[[ParseResult, str, Optional[str]], None]] = None
@@ -177,22 +182,59 @@ class PipelineWorker:
                 # Text passed to parser
                 text_to_parse = transcript.strip() if transcript else ""
 
-                # 2. Parse scripture citation
+                # 2. Update rolling text buffer & parse
+                raw_chunk_text = transcript.strip() if transcript else ""
+                now_epoch = time.time()
+
+                if raw_chunk_text:
+                    if self.on_transcript:
+                        self.on_transcript(raw_chunk_text)
+
+                    # Append to rolling transcript buffer
+                    self._rolling_transcript_buffer.append({"text": raw_chunk_text, "time": now_epoch})
+
+                # Prune buffer older than buffer_window_seconds (25.0s)
+                cutoff_time = now_epoch - self.buffer_window_seconds
+                self._rolling_transcript_buffer = [
+                    item for item in self._rolling_transcript_buffer if item["time"] >= cutoff_time
+                ]
+
+                # Combine buffer text
+                combined_buffer_text = " ".join(item["text"] for item in self._rolling_transcript_buffer).strip()
+
                 parse_res = None
                 parser_output_str = "no match: empty transcript"
 
-                if text_to_parse:
-                    if self.on_transcript:
-                        self.on_transcript(text_to_parse)
-
+                if combined_buffer_text:
                     with self._context_lock:
                         ctx = self._context_reference
 
-                    parse_res = self.parser.parse(text_to_parse, context_reference=ctx)
+                    parse_res = self.parser.parse(combined_buffer_text, context_reference=ctx)
 
                     if parse_res and parse_res.is_valid and parse_res.reference:
-                        ref_formatted = parse_res.reference.format_reference(default_version=self.default_version)
-                        parser_output_str = f"{ref_formatted} (conf={parse_res.confidence:.2f})"
+                        ref = parse_res.reference
+                        ref_tuple = (ref.book_id, ref.chapter, ref.verse_start, ref.verse_end)
+                        ref_formatted = ref.format_reference(default_version=self.default_version)
+
+                        # Check if duplicate of immediately previous match
+                        if ref_tuple == self._last_matched_ref_tuple:
+                            parser_output_str = f"already suggested: {ref_formatted}"
+                            # Do not re-emit duplicate suggestion
+                            parse_res = None
+                        else:
+                            self._last_matched_ref_tuple = ref_tuple
+                            parser_output_str = f"{ref_formatted} (conf={parse_res.confidence:.2f})"
+
+                            # CONSUME the matched portion from rolling buffer so it isn't suggested twice
+                            raw_matched = parse_res.raw_match
+                            matched_idx = combined_buffer_text.lower().find(raw_matched.lower())
+                            if matched_idx != -1:
+                                remainder_text = combined_buffer_text[matched_idx + len(raw_matched):].strip()
+                                if remainder_text:
+                                    self._rolling_transcript_buffer = [{"text": remainder_text, "time": now_epoch}]
+                                else:
+                                    self._rolling_transcript_buffer = []
+
                     elif parse_res and parse_res.low_confidence_reasons:
                         parser_output_str = f"no match: {', '.join(parse_res.low_confidence_reasons)}"
                     else:
@@ -205,9 +247,9 @@ class PipelineWorker:
                     chunk_length_sec=chunk_len_sec,
                     sample_rate=sr,
                     channels=ch,
-                    raw_whisper_text=transcript,
+                    raw_whisper_text=raw_chunk_text,
                     detected_language=detected_lang,
-                    text_passed_to_parser=text_to_parse,
+                    text_passed_to_parser=combined_buffer_text,
                     parser_output=parser_output_str,
                     audio_saved_path=saved_wav_path,
                 )

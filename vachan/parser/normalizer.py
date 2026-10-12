@@ -6,8 +6,9 @@ English words ('three', 'sixteen', 'first'), and Hindi words / Romanized Hinglis
 """
 
 import json
+import re
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 # Standard English number words to integers
 ENGLISH_NUMBER_WORDS: Dict[str, int] = {
@@ -29,6 +30,9 @@ DEVANAGARI_DIGITS = {
     "५": "5", "६": "6", "७": "7", "८": "8", "९": "9",
 }
 
+# Words to not replace during aggressive sentence regex replacement to avoid false positives
+SKIP_WORDS = {"to", "no", "do", "in", "se", "ke", "ko", "or", "so"}
+
 
 class NumberNormalizer:
     """Normalizes numbers from digits, English words, and Hindi words."""
@@ -42,6 +46,13 @@ class NumberNormalizer:
             with open(data_path, "r", encoding="utf-8") as f:
                 self.hindi_dict = json.load(f)
 
+        # Pre-sort Hindi words by length descending
+        self._hindi_sorted_items = sorted(
+            [(k, v) for k, v in self.hindi_dict.items() if k.lower() not in SKIP_WORDS],
+            key=lambda x: len(x[0]),
+            reverse=True,
+        )
+
     def convert_devanagari_digits_to_ascii(self, text: str) -> str:
         """Convert any Devanagari numerals in the text to ASCII digits (e.g. '१६' -> '16')."""
         out = []
@@ -51,6 +62,39 @@ class NumberNormalizer:
             else:
                 out.append(ch)
         return "".join(out)
+
+    def normalize_spoken_numbers_in_text(self, text: str) -> str:
+        """Pre-normalize spoken English, Hindi, and Devanagari numbers in text to ASCII digits."""
+        # 1. Convert Devanagari numerals
+        text = self.convert_devanagari_digits_to_ascii(text)
+
+        # 2. Convert compound English tens+ones (e.g. "twenty eight" -> "28")
+        tens = ["twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
+        ones = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
+        for ten in tens:
+            for one in ones:
+                val = ENGLISH_NUMBER_WORDS[ten] + ENGLISH_NUMBER_WORDS[one]
+                pattern = r"\b" + ten + r"[\s\-]+" + one + r"\b"
+                text = re.sub(pattern, str(val), text, flags=re.IGNORECASE)
+
+        # 3. Convert single English number words
+        for word, val in sorted(ENGLISH_NUMBER_WORDS.items(), key=lambda x: len(x[0]), reverse=True):
+            if " " not in word and "-" not in word and word not in SKIP_WORDS:
+                pattern = r"\b" + re.escape(word) + r"\b"
+                text = re.sub(pattern, str(val), text, flags=re.IGNORECASE)
+
+        # 4. Convert Hindi number words (both Devanagari and Romanized)
+        for word, val in self._hindi_sorted_items:
+            # Check if devanagari or latin
+            is_ascii = all(ord(c) < 128 for c in word)
+            if is_ascii:
+                pattern = r"\b" + re.escape(word) + r"\b"
+                text = re.sub(pattern, str(val), text, flags=re.IGNORECASE)
+            else:
+                pattern = r"(?<![\u0900-\u097F\w])" + re.escape(word) + r"(?![\u0900-\u097F\w])"
+                text = re.sub(pattern, str(val), text)
+
+        return text
 
     def parse_number_token(self, token: str) -> Optional[int]:
         """Convert a single token or clean phrase into an integer, if recognizable."""

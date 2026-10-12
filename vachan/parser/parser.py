@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from rapidfuzz import fuzz, process
+
 from vachan.core.models import BibleReference, ParseResult
 from vachan.parser.normalizer import NumberNormalizer
 from vachan.parser.validator import CanonValidator
@@ -82,6 +84,8 @@ class ReferenceParser:
         self.normalizer = NumberNormalizer(hindi_numbers_path)
         self.validator = CanonValidator(verse_counts_path)
         self.aliases: List[BookAlias] = []
+        self._fuzzy_alias_dict: Dict[str, BookAlias] = {}
+        self._fuzzy_alias_keys: List[str] = []
         self._load_books(books_path)
 
     def _load_books(self, path: Path) -> None:
@@ -101,6 +105,40 @@ class ReferenceParser:
             # Canonical English name
             raw_aliases.append((name.lower(), book_id, name))
 
+            # Numbered book ordinal variations
+            if name.startswith("1 "):
+                base = name[2:].lower()
+                raw_aliases.append((f"first {base}", book_id, name))
+                raw_aliases.append((f"1st {base}", book_id, name))
+                raw_aliases.append((f"pehla {base}", book_id, name))
+            elif name.startswith("2 "):
+                base = name[2:].lower()
+                raw_aliases.append((f"second {base}", book_id, name))
+                raw_aliases.append((f"2nd {base}", book_id, name))
+                raw_aliases.append((f"doosra {base}", book_id, name))
+            elif name.startswith("3 "):
+                base = name[2:].lower()
+                raw_aliases.append((f"third {base}", book_id, name))
+                raw_aliases.append((f"3rd {base}", book_id, name))
+                raw_aliases.append((f"teesra {base}", book_id, name))
+
+            # Common misspellings and church variations
+            if book_id == "PSA":
+                for p_alias in ["zabur", "zaboor", "ज़बूर", "psalms", "psalm", "bhajan samhita", "bhajan"]:
+                    raw_aliases.append((p_alias, book_id, name))
+            elif book_id == "ROM":
+                for r_alias in ["romans", "romiyo", "romiyon", "romi"]:
+                    raw_aliases.append((r_alias, book_id, name))
+            elif book_id == "JHN":
+                for j_alias in ["john", "yuhanna", "yohanna", "yuhana", "yohana"]:
+                    raw_aliases.append((j_alias, book_id, name))
+            elif book_id == "MAT":
+                for m_alias in ["matthew", "mathew", "mati", "matti"]:
+                    raw_aliases.append((m_alias, book_id, name))
+            elif book_id == "REV":
+                for rev_alias in ["revelation", "revelations", "prakashitvakya", "prakashit vakya"]:
+                    raw_aliases.append((rev_alias, book_id, name))
+
             # Abbreviations
             for abbr in b.get("abbreviations", []):
                 raw_aliases.append((abbr.lower(), book_id, name))
@@ -114,20 +152,32 @@ class ReferenceParser:
             for r in b.get("roman_aliases", []):
                 raw_aliases.append((r.lower(), book_id, name))
 
-        # Sort by length descending so longer phrases match first (e.g. '1 samuel' before 'samuel')
-        raw_aliases.sort(key=lambda x: len(x[0]), reverse=True)
+        # Deduplicate while preserving order
+        seen_aliases = set()
+        deduped_raw: List[Tuple[str, str, str]] = []
+        for a_text, b_id, c_name in raw_aliases:
+            a_clean = a_text.strip().lower()
+            if a_clean and a_clean not in seen_aliases:
+                seen_aliases.add(a_clean)
+                deduped_raw.append((a_clean, b_id, c_name))
 
-        for alias_text, book_id, name in raw_aliases:
+        # Sort by length descending so longer phrases match first (e.g. '1 samuel' before 'samuel')
+        deduped_raw.sort(key=lambda x: len(x[0]), reverse=True)
+
+        for alias_text, book_id, name in deduped_raw:
             escaped = re.escape(alias_text)
             is_multi = " " in alias_text
-            self.aliases.append(
-                BookAlias(
-                    book_id=book_id,
-                    canonical_name=name,
-                    pattern=escaped,
-                    is_multi_word=is_multi,
-                )
+            alias_obj = BookAlias(
+                book_id=book_id,
+                canonical_name=name,
+                pattern=escaped,
+                is_multi_word=is_multi,
             )
+            self.aliases.append(alias_obj)
+            self._fuzzy_alias_dict[alias_text] = alias_obj
+
+        # Filter candidate keys for rapidfuzz
+        self._fuzzy_alias_keys = [k for k in self._fuzzy_alias_dict.keys() if len(k) >= 3]
 
     def detect_version(self, text: str) -> Optional[str]:
         """Detect any Bible version keyword mentioned in text."""
@@ -138,10 +188,21 @@ class ReferenceParser:
         return None
 
     def _clean_text(self, text: str) -> str:
-        """Pre-clean input text for punctuation and Devanagari numerals."""
-        # Convert Devanagari numerals
+        """Pre-clean input text for punctuation, spoken numbers, and Devanagari numerals."""
+        # 1. Normalize quotes and apostrophes
+        text = text.replace("’", "'").replace("‘", "'").replace("`", "'")
+        text = re.sub(r"\b([a-zA-Z]+)'s\b", r"\1s", text)
+        text = re.sub(r"\b([a-zA-Z]+)'\b", r"\1", text)
+
+        # 2. Convert Devanagari numerals
         text = self.normalizer.convert_devanagari_digits_to_ascii(text)
-        # Normalize punctuation: replace colons, commas, dots with spaces around colons
+
+        # 3. Pre-normalize spoken numbers in text (e.g. "twenty eight" -> "28")
+        text = self.normalizer.normalize_spoken_numbers_in_text(text)
+
+        # 4. Standardize chapter.verse to colon (e.g. "3.16" -> "3:16")
+        text = re.sub(r"\b(\d+)[\.](\d+)\b", r"\1:\2", text)
+
         return text
 
     def parse(
@@ -347,6 +408,102 @@ class ReferenceParser:
                         low_confidence_reasons=tuple(reasons),
                     )
 
+        # 3. Fuzzy matching fallback for near-miss book names
+        fuzzy_res = self._find_fuzzy_book_reference(text, lower, version)
+        if fuzzy_res:
+            return fuzzy_res
+
+        return None
+
+    def _find_fuzzy_book_reference(
+        self,
+        text: str,
+        lower: str,
+        version: Optional[str],
+    ) -> Optional[ParseResult]:
+        """Scan text using fuzzy similarity against book aliases when exact match fails."""
+        words = lower.split()
+        if not words:
+            return None
+
+        best_alias: Optional[BookAlias] = None
+        best_score: float = 0.0
+        best_span: Optional[Tuple[int, int]] = None
+        best_ngram_text = ""
+
+        # Check n-grams up to 3 words
+        for n in (3, 2, 1):
+            if best_score >= 88.0:
+                break
+            for i in range(len(words) - n + 1):
+                ngram = " ".join(words[i : i + n])
+                if len(ngram) < 3 or ngram in ("and", "the", "for", "from", "with", "verse", "chapter", "turn", "read"):
+                    continue
+
+                candidate = process.extractOne(ngram, self._fuzzy_alias_keys, scorer=fuzz.ratio)
+                if candidate and candidate[1] >= 80.0:
+                    matched_key, score = candidate[0], candidate[1]
+                    ngram_pos = lower.find(ngram)
+                    if ngram_pos != -1:
+                        remainder = text[ngram_pos + len(ngram):].strip()
+                        if self._extract_numbers(remainder) or self._extract_chapter_only(remainder):
+                            if score > best_score:
+                                best_score = score
+                                best_alias = self._fuzzy_alias_dict[matched_key]
+                                best_span = (ngram_pos, ngram_pos + len(ngram))
+                                best_ngram_text = ngram
+
+        if best_alias and best_span and best_score >= 80.0:
+            book_start_pos, book_end_pos = best_span
+            remainder = text[book_end_pos:].strip()
+            chap_verse = self._extract_numbers(remainder)
+            if chap_verse:
+                chapter, verse_start, verse_end, matched_tokens_str = chap_verse
+                if self.validator.is_valid_reference(best_alias.book_id, chapter, verse_start, verse_end):
+                    ref = BibleReference(
+                        book_id=best_alias.book_id,
+                        book_name=best_alias.canonical_name,
+                        chapter=chapter,
+                        verse_start=verse_start,
+                        verse_end=verse_end,
+                        version=version,
+                    )
+                    confidence, reasons = self._calculate_confidence(
+                        text, book_start_pos, book_end_pos, best_alias, version, matched_tokens_str
+                    )
+                    confidence = max(0.30, confidence - 0.20)
+                    reasons.append(f"fuzzy_book_match: {best_ngram_text}->{best_alias.canonical_name} ({best_score:.0f}%)")
+                    return ParseResult(
+                        reference=ref,
+                        raw_match=text[book_start_pos : book_end_pos + len(matched_tokens_str) + 1].strip(),
+                        confidence=confidence,
+                        low_confidence_reasons=tuple(reasons),
+                    )
+
+            chap_only = self._extract_chapter_only(remainder)
+            if chap_only:
+                chapter, matched_tokens_str = chap_only
+                if self.validator.is_valid_chapter(best_alias.book_id, chapter):
+                    ref = BibleReference(
+                        book_id=best_alias.book_id,
+                        book_name=best_alias.canonical_name,
+                        chapter=chapter,
+                        verse_start=1,
+                        version=version,
+                    )
+                    confidence, reasons = self._calculate_confidence(
+                        text, book_start_pos, book_end_pos, best_alias, version, matched_tokens_str
+                    )
+                    confidence = max(0.20, confidence - 0.30)
+                    reasons.append(f"fuzzy_book_match: {best_ngram_text}->{best_alias.canonical_name} ({best_score:.0f}%)")
+                    reasons.append("chapter_only_default_verse_1")
+                    return ParseResult(
+                        reference=ref,
+                        raw_match=text[book_start_pos : book_end_pos + len(matched_tokens_str) + 1].strip(),
+                        confidence=confidence,
+                        low_confidence_reasons=tuple(reasons),
+                    )
+
         return None
 
     def _extract_numbers(
@@ -354,15 +511,23 @@ class ReferenceParser:
         text: str,
     ) -> Optional[Tuple[int, int, Optional[int], str]]:
         """Extract chapter, verse_start, and optional verse_end from text."""
-        # 1. Standard format: "3:16", "3:16-18", "3: 16"
-        std_match = re.match(r"^[:\s]*(\d+)[:\.]\s*(\d+)(?:\s*[-–—to\s]+\s*(\d+))?", text)
+        # 1. Standard format: "3:16", "3.16", "3-16", "3:16-18", "3.16-18", "3: 16"
+        std_match = re.match(r"^[:\s]*(\d+)[:\.\-]\s*(\d+)(?:\s*(?:[-–—]|to|se|तक)\s*(\d+))?", text)
         if std_match:
             ch = int(std_match.group(1))
             v_start = int(std_match.group(2))
             v_end = int(std_match.group(3)) if std_match.group(3) else None
             return ch, v_start, v_end, std_match.group(0)
 
-        # 2. Natural language with cue words:
+        # 2. Space separated: "3 16", "3 16-18", "3 16 to 18"
+        space_match = re.match(r"^[:\s]*(\d+)\s+(\d+)(?:\s*(?:[-–—]|to|se|तक)\s*(\d+))?", text)
+        if space_match:
+            ch = int(space_match.group(1))
+            v_start = int(space_match.group(2))
+            v_end = int(space_match.group(3)) if space_match.group(3) else None
+            return ch, v_start, v_end, space_match.group(0)
+
+        # 3. Natural language with cue words:
         # e.g.:
         # "chapter 3 verse 16"
         # "तीन अध्याय सोलह पद"

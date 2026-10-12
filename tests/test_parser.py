@@ -423,3 +423,263 @@ def test_malachi_spoken(parser: ReferenceParser) -> None:
     assert res.reference.book_name == "Malachi"
     assert res.reference.chapter == 3
     assert res.reference.verse_start == 10
+
+
+# =========================================================================
+# 8. Real Whisper-Style Output Tests (Lowercase, Punctuation, Digits, Split)
+# =========================================================================
+
+def test_whisper_lowercase_dot_separator(parser: ReferenceParser) -> None:
+    res = parser.parse("john 3.16")
+    assert res is not None
+    assert res.reference.book_name == "John"
+    assert res.reference.chapter == 3
+    assert res.reference.verse_start == 16
+
+
+def test_whisper_space_separated_digits(parser: ReferenceParser) -> None:
+    res = parser.parse("john 3 16")
+    assert res is not None
+    assert res.reference.book_name == "John"
+    assert res.reference.chapter == 3
+    assert res.reference.verse_start == 16
+
+
+def test_whisper_hyphen_separated_digits(parser: ReferenceParser) -> None:
+    res = parser.parse("john 3-16")
+    assert res is not None
+    assert res.reference.book_name == "John"
+    assert res.reference.chapter == 3
+    assert res.reference.verse_start == 16
+
+
+def test_whisper_spaced_colon(parser: ReferenceParser) -> None:
+    res = parser.parse("john 3 : 16")
+    assert res is not None
+    assert res.reference.book_name == "John"
+    assert res.reference.chapter == 3
+    assert res.reference.verse_start == 16
+
+
+def test_whisper_three_sixteen(parser: ReferenceParser) -> None:
+    res = parser.parse("john three sixteen")
+    assert res is not None
+    assert res.reference.book_name == "John"
+    assert res.reference.chapter == 3
+    assert res.reference.verse_start == 16
+
+
+def test_whisper_devanagari_numerals_colon(parser: ReferenceParser) -> None:
+    res = parser.parse("यूहन्ना ३:१६")
+    assert res is not None
+    assert res.reference.book_name == "John"
+    assert res.reference.chapter == 3
+    assert res.reference.verse_start == 16
+
+
+def test_whisper_devanagari_numerals_dot(parser: ReferenceParser) -> None:
+    res = parser.parse("यूहन्ना ३.१६")
+    assert res is not None
+    assert res.reference.book_name == "John"
+    assert res.reference.chapter == 3
+    assert res.reference.verse_start == 16
+
+
+def test_whisper_devanagari_numerals_spaced(parser: ReferenceParser) -> None:
+    res = parser.parse("यूहन्ना ३ १६")
+    assert res is not None
+    assert res.reference.book_name == "John"
+    assert res.reference.chapter == 3
+    assert res.reference.verse_start == 16
+
+
+def test_whisper_yohanna_alias(parser: ReferenceParser) -> None:
+    res = parser.parse("yohanna 3 16")
+    assert res is not None
+    assert res.reference.book_name == "John"
+    assert res.reference.chapter == 3
+    assert res.reference.verse_start == 16
+
+
+def test_whisper_yuhanna_alias_lowercase(parser: ReferenceParser) -> None:
+    res = parser.parse("yuhanna 3:16")
+    assert res is not None
+    assert res.reference.book_name == "John"
+    assert res.reference.chapter == 3
+    assert res.reference.verse_start == 16
+
+
+def test_whisper_yuhanna_spoken_words(parser: ReferenceParser) -> None:
+    res = parser.parse("yuhanna teen solah")
+    assert res is not None
+    assert res.reference.book_name == "John"
+    assert res.reference.chapter == 3
+    assert res.reference.verse_start == 16
+
+
+def test_whisper_john_possessive_apostrophe(parser: ReferenceParser) -> None:
+    res = parser.parse("john's 3:16")
+    assert res is not None
+    assert res.reference.book_name == "John"
+    assert res.reference.chapter == 3
+    assert res.reference.verse_start == 16
+
+
+def test_whisper_romans_apostrophe(parser: ReferenceParser) -> None:
+    res = parser.parse("roman's 8:28")
+    assert res is not None
+    assert res.reference.book_name == "Romans"
+    assert res.reference.chapter == 8
+    assert res.reference.verse_start == 28
+
+
+def test_whisper_romans_space_digits(parser: ReferenceParser) -> None:
+    res = parser.parse("romans 8 28")
+    assert res is not None
+    assert res.reference.book_name == "Romans"
+    assert res.reference.chapter == 8
+    assert res.reference.verse_start == 28
+
+
+def test_whisper_romans_spoken_twenty_eight(parser: ReferenceParser) -> None:
+    res = parser.parse("turn to romans chapter eight verse twenty eight")
+    assert res is not None
+    assert res.reference.book_name == "Romans"
+    assert res.reference.chapter == 8
+    assert res.reference.verse_start == 28
+
+
+def test_whisper_romiyo_hindi_romanized(parser: ReferenceParser) -> None:
+    res = parser.parse("romiyo 8 28")
+    assert res is not None
+    assert res.reference.book_name == "Romans"
+    assert res.reference.chapter == 8
+    assert res.reference.verse_start == 28
+
+
+def test_whisper_romiyo_spoken_hindi_numbers(parser: ReferenceParser) -> None:
+    res = parser.parse("romiyo aath adhyay atthais pad")
+    assert res is not None
+    assert res.reference.book_name == "Romans"
+    assert res.reference.chapter == 8
+    assert res.reference.verse_start == 28
+
+
+def test_whisper_psalm_single_chapter(parser: ReferenceParser) -> None:
+    res = parser.parse("psalm 23")
+    assert res is not None
+    assert res.reference.book_name == "Psalms"
+    assert res.reference.chapter == 23
+    assert res.reference.verse_start == 1
+
+
+def test_whisper_psalms_plural(parser: ReferenceParser) -> None:
+    res = parser.parse("psalms 23 1")
+    assert res is not None
+    assert res.reference.book_name == "Psalms"
+    assert res.reference.chapter == 23
+    assert res.reference.verse_start == 1
+
+
+def test_whisper_zabur_alias(parser: ReferenceParser) -> None:
+    res = parser.parse("zabur 23")
+    assert res is not None
+    assert res.reference.book_name == "Psalms"
+    assert res.reference.chapter == 23
+    assert res.reference.verse_start == 1
+
+
+def test_whisper_zaboor_alternate(parser: ReferenceParser) -> None:
+    res = parser.parse("zaboor 23 1")
+    assert res is not None
+    assert res.reference.book_name == "Psalms"
+    assert res.reference.chapter == 23
+    assert res.reference.verse_start == 1
+
+
+def test_whisper_bhajan_samhita_devanagari(parser: ReferenceParser) -> None:
+    res = parser.parse("भजन संहिता २३")
+    assert res is not None
+    assert res.reference.book_name == "Psalms"
+    assert res.reference.chapter == 23
+    assert res.reference.verse_start == 1
+
+
+def test_whisper_first_corinthians_words(parser: ReferenceParser) -> None:
+    res = parser.parse("first corinthians 13 4")
+    assert res is not None
+    assert res.reference.book_name == "1 Corinthians"
+    assert res.reference.chapter == 13
+    assert res.reference.verse_start == 4
+
+
+def test_whisper_first_corinthians_spoken_numbers(parser: ReferenceParser) -> None:
+    res = parser.parse("first corinthians chapter thirteen verse four")
+    assert res is not None
+    assert res.reference.book_name == "1 Corinthians"
+    assert res.reference.chapter == 13
+    assert res.reference.verse_start == 4
+
+
+def test_whisper_second_timothy_ordinal(parser: ReferenceParser) -> None:
+    res = parser.parse("second timothy 1 7")
+    assert res is not None
+    assert res.reference.book_name == "2 Timothy"
+    assert res.reference.chapter == 1
+    assert res.reference.verse_start == 7
+
+
+def test_whisper_matthew_misspelling_mathew(parser: ReferenceParser) -> None:
+    res = parser.parse("mathew 5 7")
+    assert res is not None
+    assert res.reference.book_name == "Matthew"
+    assert res.reference.chapter == 5
+    assert res.reference.verse_start == 7
+
+
+def test_whisper_fuzzy_johan(parser: ReferenceParser) -> None:
+    res = parser.parse("johan 3:16")
+    assert res is not None
+    assert res.reference.book_name == "John"
+    assert res.reference.chapter == 3
+    assert res.reference.verse_start == 16
+
+
+def test_whisper_fuzzy_romens(parser: ReferenceParser) -> None:
+    res = parser.parse("romens 8:28")
+    assert res is not None
+    assert res.reference.book_name == "Romans"
+    assert res.reference.chapter == 8
+    assert res.reference.verse_start == 28
+
+
+def test_whisper_fuzzy_philipians(parser: ReferenceParser) -> None:
+    res = parser.parse("philipians 4 13")
+    assert res is not None
+    assert res.reference.book_name == "Philippians"
+    assert res.reference.chapter == 4
+    assert res.reference.verse_start == 13
+
+
+def test_whisper_revelations_plural(parser: ReferenceParser) -> None:
+    res = parser.parse("revelations 21 4")
+    assert res is not None
+    assert res.reference.book_name == "Revelation"
+    assert res.reference.chapter == 21
+    assert res.reference.verse_start == 4
+
+
+def test_whisper_split_conversational_filler(parser: ReferenceParser) -> None:
+    res = parser.parse("and now church please turn with me to john chapter 3 verse 16 for today's sermon")
+    assert res is not None
+    assert res.reference.book_name == "John"
+    assert res.reference.chapter == 3
+    assert res.reference.verse_start == 16
+
+
+def test_whisper_hindi_conversational_filler(parser: ReferenceParser) -> None:
+    res = parser.parse("आइए हम सब मिलकर निकालेंगे यूहन्ना 3 अध्याय 16 पद")
+    assert res is not None
+    assert res.reference.book_name == "John"
+    assert res.reference.chapter == 3
+    assert res.reference.verse_start == 16
