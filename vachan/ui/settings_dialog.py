@@ -61,13 +61,16 @@ class SettingsDialog(QDialog):
         form.addRow("Microphone / mixer", self.device)
         self.gain = QDoubleSpinBox(minimum=0.5, maximum=8.0, singleStep=0.25, value=s.input_gain, suffix=" x")
         form.addRow("Input gain", self.gain)
-        self.silence = QDoubleSpinBox(decimals=4, minimum=0.0, maximum=0.05, singleStep=0.0005, value=s.silence_rms)
+        self.silence = QDoubleSpinBox(
+            decimals=4, minimum=0.0, maximum=0.05, singleStep=0.0005, value=s.silence_rms
+        )
         self.silence.setToolTip("Windows quieter than this RMS are skipped without running Whisper")
         form.addRow("Silence threshold", self.silence)
 
         form.addRow(_section("Speech recognition"))
         self.stt_device = _combo(
-            [("Automatic (GPU if available)", "auto"), ("NVIDIA GPU (CUDA)", "cuda"), ("CPU only", "cpu")], s.device
+            [("Automatic (GPU if available)", "auto"), ("NVIDIA GPU (CUDA)", "cuda"), ("CPU only", "cpu")],
+            s.device,
         )
         form.addRow("Run Whisper on", self.stt_device)
         self.model_gpu = _combo([(m, m) for m in MODELS], s.model_gpu)
@@ -78,7 +81,9 @@ class SettingsDialog(QDialog):
             [("Hindi + English (auto per sentence)", "auto"), ("Hindi", "hi"), ("English", "en")], s.language
         )
         form.addRow("Language", self.language)
-        self.window = QDoubleSpinBox(minimum=4.0, maximum=12.0, singleStep=0.5, value=s.window_sec, suffix=" s")
+        self.window = QDoubleSpinBox(
+            minimum=4.0, maximum=12.0, singleStep=0.5, value=s.window_sec, suffix=" s"
+        )
         form.addRow("Audio window", self.window)
         self.step = QDoubleSpinBox(minimum=0.5, maximum=4.0, singleStep=0.25, value=s.step_sec, suffix=" s")
         form.addRow("Update every", self.step)
@@ -96,7 +101,9 @@ class SettingsDialog(QDialog):
         form.addRow("Output theme", self.theme)
 
         form.addRow(_section("Approval"))
-        self.threshold = QSpinBox(minimum=50, maximum=100, value=round(s.auto_show_threshold * 100), suffix=" %")
+        self.threshold = QSpinBox(
+            minimum=50, maximum=100, value=round(s.auto_show_threshold * 100), suffix=" %"
+        )
         form.addRow("Auto-show minimum confidence", self.threshold)
         self.cooldown = QSpinBox(minimum=5, maximum=600, value=round(s.duplicate_cooldown_sec), suffix=" s")
         form.addRow("Ignore repeats for", self.cooldown)

@@ -1,28 +1,30 @@
+"""Report whether faster-whisper can use the NVIDIA GPU. Never fails the launcher."""
+
 import sys
+from pathlib import Path
 
-print("Python version:", sys.version)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-try:
-    import torch
-    print("PyTorch version:", torch.__version__)
-    print("CUDA available in torch:", torch.cuda.is_available())
-    if torch.cuda.is_available():
-        print("Device name:", torch.cuda.get_device_name(0))
-        print("Device capability:", torch.cuda.get_device_capability(0))
-        print("CUDA version:", torch.version.cuda)
-except ImportError:
-    print("PyTorch not installed in this environment.")
 
-try:
-    import ctranslate2
-    print("CTranslate2 version:", ctranslate2.__version__)
-    cuda_types = ctranslate2.get_supported_compute_types("cuda")
-    print("CTranslate2 CUDA supported compute types:", cuda_types)
-except Exception as e:
-    print("CTranslate2 CUDA check:", e)
+def main() -> int:
+    """Print GPU status in one or two lines."""
+    from vachan.stt.transcriber import add_cuda_dll_dirs
 
-try:
-    import faster_whisper
-    print("faster_whisper version:", faster_whisper.__version__)
-except ImportError:
-    print("faster_whisper not installed.")
+    try:
+        import ctranslate2
+
+        add_cuda_dll_dirs()
+        count = ctranslate2.get_cuda_device_count()
+        if count:
+            types = ", ".join(sorted(ctranslate2.get_supported_compute_types("cuda")))
+            print(f"[GPU] {count} CUDA device(s) usable by CTranslate2 {ctranslate2.__version__} ({types})")
+            print("      Whisper large-v3-turbo will run on the GPU.")
+        else:
+            print("[GPU] No CUDA device - Whisper will run on the CPU (slower, model 'small').")
+    except Exception as e:
+        print(f"[GPU] CUDA not usable ({e}) - Whisper will run on the CPU.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

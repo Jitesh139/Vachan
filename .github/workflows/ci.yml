@@ -2,33 +2,30 @@ name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   lint-and-test:
     runs-on: windows-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ruff pytest
-          # Note: Full requirements installation can be enabled when core modules are built
-
-      - name: Run Ruff Linter
+          pip install -r requirements.txt pytest==9.1.1 ruff==0.17.0 black==26.10.1
+      - name: Lint
         run: |
           ruff check .
-
-      - name: Run Pytest
-        run: |
-          pytest
+          black --check .
+      - name: Build Bible database
+        run: python scripts/download_bibles.py
+      - name: Tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest -q

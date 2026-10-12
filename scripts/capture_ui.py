@@ -65,11 +65,13 @@ def main() -> int:
     second = suggest("रोमियों के आठ अध्याय में 28 पद देखेंगे")
     win._on_suggestion(second)
     win._on_transcript("And the next verse in the NIV says", "en")
-    third = suggest("Psalm 23 verse 1 in the NIV")
+    third_text = "Psalm 23 verse 1 in the NIV"
+    third = suggest(third_text)
     win._set_suggestion(third)
     win.btn_debug.setChecked(True)
-    win._on_debug(ChunkDebugInfo("10:42:07.512", 0.0412, 7.0, "Microphone (USB Audio Mixer)", 48000,
-                                 "Psalm 23 verse 1 in the NIV", "en", 0.34, "", "MATCH Psalms 23:1 (conf 1.00)"))  # fmt: skip
+    mic = "Microphone (USB Audio Mixer)"
+    match = "MATCH Psalms 23:1 (conf 1.00)"
+    win._on_debug(ChunkDebugInfo("10:42:07.512", 0.0412, 7.0, mic, 48000, third_text, "en", 0.34, "", match))
     win.resize(1280, 800)
     win.show()
     output.resize(1280, 720)

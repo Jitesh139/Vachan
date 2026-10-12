@@ -140,9 +140,15 @@ class VerseDisplayWindow(QWidget):
         ref = s.reference
         versions = [s.primary.version]
         if s.secondary and self.display_mode in ("both", "secondary"):
-            versions = [s.secondary.version] if self.display_mode == "secondary" else versions + [s.secondary.version]
+            versions = (
+                [s.secondary.version]
+                if self.display_mode == "secondary"
+                else versions + [s.secondary.version]
+            )
         if self.display_mode == "secondary" and s.secondary and s.secondary.version.startswith("HIN"):
-            name = f"{self._hindi_names.get(ref.book_id, ref.book_name)} {ref.format_reference().split(' ')[-1]}"
+            name = (
+                f"{self._hindi_names.get(ref.book_id, ref.book_name)} {ref.format_reference().split(' ')[-1]}"
+            )
         else:
             name = ref.format_reference()
         return "  ·  ".join([name] + [VERSION_LABEL.get(v, v) for v in versions])
@@ -231,7 +237,11 @@ class VerseDisplayWindow(QWidget):
         ref_font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 104)
         p.setFont(ref_font)
         p.setPen(QColor(t.accent))
-        p.drawText(QRectF(card.left(), y, card_w, ref_px * 1.8), int(Qt.AlignmentFlag.AlignHCenter), self._reference_line())
+        p.drawText(
+            QRectF(card.left(), y, card_w, ref_px * 1.8),
+            int(Qt.AlignmentFlag.AlignHCenter),
+            self._reference_line(),
+        )
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         """Keep the resize grip in the corner."""

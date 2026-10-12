@@ -43,6 +43,10 @@ from vachan.ui import theme
 from vachan.ui.settings_dialog import STT_FIELDS, SettingsDialog
 
 log = logging.getLogger(__name__)
+HINT = (
+    "Say e.g. “Turn to John chapter 3 verse 16”, “यूहन्ना 3 अध्याय 16 पद” or "
+    "“Romans ke aath adhyay mein 28 pad”, or type in Find a verse."
+)
 
 
 class Bridge(QObject):
@@ -107,7 +111,9 @@ def _card(name: str = "Card") -> tuple[QFrame, QVBoxLayout]:
 class ControlWindow(QMainWindow):
     """Main operator dashboard."""
 
-    def __init__(self, settings, transcriber, parser, bible, output: VerseDisplayWindow, startup_error: str = ""):
+    def __init__(
+        self, settings, transcriber, parser, bible, output: VerseDisplayWindow, startup_error: str = ""
+    ):
         super().__init__()
         self.settings: Settings = settings
         self.transcriber, self.parser, self.bible, self.output = transcriber, parser, bible, output
@@ -137,7 +143,9 @@ class ControlWindow(QMainWindow):
         self.transcript.setFocus()
         if startup_error:
             self._show_error(startup_error)
-        self._meter_timer = QTimer(self, interval=40, timeout=lambda: self.meter.set_level(self.audio.get_level()))
+        self._meter_timer = QTimer(
+            self, interval=40, timeout=lambda: self.meter.set_level(self.audio.get_level())
+        )
         self._meter_timer.start()
         if self.pipeline:
             threading.Thread(target=self._preload_model, daemon=True).start()
@@ -240,7 +248,9 @@ class ControlWindow(QMainWindow):
         lay.addLayout(top)
         self.transcript = QTextBrowser()
         self.transcript.document().setMaximumBlockCount(400)  # bounded memory for long services
-        self.transcript.setStyleSheet(f"font-family: '{theme.UI_FONT}', '{theme.SANS_DEVA}'; font-size: 13pt;")
+        self.transcript.setStyleSheet(
+            f"font-family: '{theme.UI_FONT}', '{theme.SANS_DEVA}'; font-size: 13pt;"
+        )
         self.transcript.setPlaceholderText(
             "Press Start listening. The preacher's words appear here, with detected references highlighted."
         )
@@ -319,8 +329,11 @@ class ControlWindow(QMainWindow):
             b.setObjectName("Seg")
             b.setCheckable(True)
             b.setToolTip(tip)
-            radius = "border-top-left-radius: 8px; border-bottom-left-radius: 8px;" if i == 0 else (
-                "border-top-right-radius: 8px; border-bottom-right-radius: 8px;")
+            radius = (
+                "border-top-left-radius: 8px; border-bottom-left-radius: 8px;"
+                if i == 0
+                else ("border-top-right-radius: 8px; border-bottom-right-radius: 8px;")
+            )
             b.setStyleSheet(f"QPushButton#Seg {{ {radius} }}")
             self.mode_group.addButton(b, i)
             mode_row.addWidget(b)
@@ -335,7 +348,11 @@ class ControlWindow(QMainWindow):
         self.theme_combo.setCurrentText(self.settings.theme)
         out_row.addWidget(self.theme_combo, 1)
         self.lang_combo = QComboBox()
-        for label, value in [("Both languages", "both"), ("Main only", "primary"), ("Second only", "secondary")]:
+        for label, value in [
+            ("Both languages", "both"),
+            ("Main only", "primary"),
+            ("Second only", "secondary"),
+        ]:
             self.lang_combo.addItem(label, value)
         self.lang_combo.setCurrentIndex(max(0, self.lang_combo.findData(self.settings.display_mode)))
         out_row.addWidget(self.lang_combo, 1)
@@ -373,7 +390,8 @@ class ControlWindow(QMainWindow):
         self.debug_log.setMaximumBlockCount(600)
         self.debug_log.setMinimumHeight(90)
         self.debug_log.setStyleSheet(
-            f"font-family: Consolas, '{theme.SANS_DEVA}'; font-size: 9pt; color: #A9C7A1; background: #0B0D12;"
+            f"font-family: Consolas, '{theme.SANS_DEVA}'; font-size: 9pt;"
+            " color: #A9C7A1; background: #0B0D12;"
         )
         d.addWidget(self.debug_log)
         self.debug_panel.hide()
@@ -431,7 +449,9 @@ class ControlWindow(QMainWindow):
         self.theme_combo.currentTextChanged.connect(self._change_theme)
         self.lang_combo.currentIndexChanged.connect(self._change_display_mode)
         self.mic_combo.currentIndexChanged.connect(self._change_device)
-        self.history.itemDoubleClicked.connect(lambda item: self._set_suggestion(item.data(Qt.ItemDataRole.UserRole)))
+        self.history.itemDoubleClicked.connect(
+            lambda item: self._set_suggestion(item.data(Qt.ItemDataRole.UserRole))
+        )
         for key, handler in [
             (Qt.Key.Key_Return, self._on_enter), (Qt.Key.Key_Enter, self._on_enter),
             (Qt.Key.Key_Escape, self._on_escape), (Qt.Key.Key_F5, self.toggle_listening),
@@ -662,8 +682,7 @@ class ControlWindow(QMainWindow):
         if s is None:
             self.sug_ref.setText("Listening for a reference" if self._listening else "No suggestion")
             self.sug_ref.setStyleSheet(f"color: {theme.MUTED};")
-            self.sug_text.setText(keep_text or "Say e.g. “Turn to John chapter 3 verse 16”, “यूहन्ना 3 अध्याय 16 पद”"
-                                  " or “Romans ke aath adhyay mein 28 pad”, or type in Find a verse.")  # fmt: skip
+            self.sug_text.setText(keep_text or HINT)
             self.sug_text.setStyleSheet(f"color: {theme.MUTED}; font-size: 10.5pt;")
             self.sug_text_hi.hide()
             self.sug_warn.hide()
@@ -682,14 +701,17 @@ class ControlWindow(QMainWindow):
         self.sug_warn.setVisible(bool(warnings))
         conf = s.result.confidence
         color = theme.GREEN if conf >= 0.9 and not warnings else theme.AMBER if conf >= 0.6 else theme.RED
-        self.conf_badge.setText(f"{conf * 100:.0f}%" if color == theme.GREEN else f"Review  ·  {conf * 100:.0f}%")
+        self.conf_badge.setText(
+            f"{conf * 100:.0f}%" if color == theme.GREEN else f"Review  ·  {conf * 100:.0f}%"
+        )
         self.conf_badge.setStyleSheet(self._badge_css(color))
         self.conf_badge.show()
         self._card_state("active" if color == theme.GREEN else "warn")
 
     @staticmethod
     def _badge_css(color: str) -> str:
-        return f"background: {theme.tint(color, 34)}; color: {color}; border: 1px solid {theme.tint(color, 110)};"
+        border = theme.tint(color, 110)
+        return f"background: {theme.tint(color, 34)}; color: {color}; border: 1px solid {border};"
 
     def _card_state(self, state: str) -> None:
         self.sug_card.setProperty("state", state)

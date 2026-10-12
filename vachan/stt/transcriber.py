@@ -35,16 +35,19 @@ def add_cuda_dll_dirs() -> None:
     """Make pip-installed CUDA libraries (nvidia-cublas-cu12, nvidia-cudnn-cu12) loadable."""
     import importlib.util
 
+    from vachan.core.paths import RESOURCE_DIR
+
+    bin_dirs = list(RESOURCE_DIR.glob("nvidia/*/bin"))  # PyInstaller build
     for pkg in ("nvidia.cublas", "nvidia.cudnn", "nvidia.cuda_runtime"):
         try:
             spec = importlib.util.find_spec(pkg)
         except ModuleNotFoundError:
             continue
-        for root in spec.submodule_search_locations if spec else []:
-            bin_dir = Path(root) / "bin"
-            if bin_dir.is_dir():
-                os.add_dll_directory(str(bin_dir))
-                os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
+        bin_dirs += [Path(root) / "bin" for root in (spec.submodule_search_locations if spec else [])]
+    for bin_dir in bin_dirs:
+        if bin_dir.is_dir():
+            os.add_dll_directory(str(bin_dir))
+            os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
 
 
 class WhisperTranscriber:

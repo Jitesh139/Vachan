@@ -13,6 +13,7 @@ Covers 40+ sentences across:
 """
 
 import pytest
+
 from vachan.core.models import BibleReference
 from vachan.parser import ReferenceParser
 
@@ -25,6 +26,7 @@ def parser() -> ReferenceParser:
 # ==========================================
 # 1. Standard English & Number Words Tests
 # ==========================================
+
 
 def test_english_standard_colon(parser: ReferenceParser) -> None:
     res = parser.parse("Please open to John 3:16 today.")
@@ -113,6 +115,7 @@ def test_english_turn_to_chapter_only(parser: ReferenceParser) -> None:
 # 2. Devanagari Hindi Tests
 # ==========================================
 
+
 def test_hindi_devanagari_standard(parser: ReferenceParser) -> None:
     res = parser.parse("आइए हम यूहन्ना 3:16 पढ़ें।")
     assert res is not None
@@ -199,6 +202,7 @@ def test_hindi_pehla_kurinthiyon(parser: ReferenceParser) -> None:
 # 3. Hinglish & Code-Switching Tests
 # ==========================================
 
+
 def test_hinglish_romans_ke_aath_adhyay(parser: ReferenceParser) -> None:
     res = parser.parse("Romans ke aath adhyay mein 28 pad dekhenge.")
     assert res is not None
@@ -268,6 +272,7 @@ def test_hinglish_ibraniyon(parser: ReferenceParser) -> None:
 # 4. Version Detection Tests
 # ==========================================
 
+
 def test_version_kjv(parser: ReferenceParser) -> None:
     res = parser.parse("Read Psalm 91:1 in the KJV version.")
     assert res is not None
@@ -289,6 +294,7 @@ def test_version_nlt(parser: ReferenceParser) -> None:
 # ==========================================
 # 5. Follow-ups & Relative Reference Tests
 # ==========================================
+
 
 def test_follow_up_next_verse(parser: ReferenceParser) -> None:
     ctx = BibleReference(book_id="JHN", book_name="John", chapter=3, verse_start=16)
@@ -347,6 +353,7 @@ def test_follow_up_verses_range(parser: ReferenceParser) -> None:
 # 6. Invalid & Out-of-Bounds Rejection Tests
 # ==========================================
 
+
 def test_reject_john_99_1(parser: ReferenceParser) -> None:
     res = parser.parse("Please turn to John 99:1.")
     assert res is not None
@@ -384,6 +391,7 @@ def test_ignore_random_numbers(parser: ReferenceParser) -> None:
 # ==========================================
 # 7. Additional Canonical Book Coverage Tests
 # ==========================================
+
 
 def test_joshua_english(parser: ReferenceParser) -> None:
     res = parser.parse("Joshua 1:9 be strong and courageous")
@@ -428,6 +436,7 @@ def test_malachi_spoken(parser: ReferenceParser) -> None:
 # =========================================================================
 # 8. Real Whisper-Style Output Tests (Lowercase, Punctuation, Digits, Split)
 # =========================================================================
+
 
 def test_whisper_lowercase_dot_separator(parser: ReferenceParser) -> None:
     res = parser.parse("john 3.16")

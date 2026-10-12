@@ -4,45 +4,32 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vachan"
-version = "0.1.0"
-description = "Windows desktop app that listens to sermon audio in Hindi and English, detects Bible references, and displays verses on screen for live streams."
+version = "0.2.0"
+description = "Listens to Hindi/English sermons, detects Bible references and shows the verse for live streams."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 license = { text = "MIT" }
-authors = [
-    { name = "Jitesh" }
-]
-dependencies = [
-    "PySide6>=6.6.0",
-    "sounddevice>=0.4.6",
-    "numpy>=1.24.0",
-    "faster-whisper>=1.0.0",
-    "python-dotenv>=1.0.0",
-    "pydantic>=2.5.0",
-    "requests>=2.31.0",
-]
+authors = [{ name = "Jitesh" }]
+dynamic = ["dependencies"]
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.4.0",
-    "pytest-cov>=4.1.0",
-    "ruff>=0.3.0",
-    "black>=24.0.0",
-]
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+include = ["vachan*"]
 
 [tool.ruff]
-line-length = 88
+line-length = 110
 target-version = "py311"
+extend-exclude = ["skills"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
-ignore = []
 
 [tool.black]
-line-length = 88
+line-length = 110
 target-version = ["py311"]
 
 [tool.pytest.ini_options]
-minversion = "7.0"
 testpaths = ["tests"]
 pythonpath = ["."]

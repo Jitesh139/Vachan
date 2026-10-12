@@ -26,6 +26,7 @@ share/python-wheels/
 *.egg
 MANIFEST
 *.spec
+!vachan.spec
 
 # PyInstaller
 *.manifest
@@ -89,3 +90,6 @@ logs/
 *.ogg
 tmp/
 temp/
+
+# Per-user settings written by the app
+settings.json

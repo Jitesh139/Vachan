@@ -84,7 +84,8 @@ QComboBox:focus, QLineEdit:focus, QPlainTextEdit:focus, QSpinBox:focus, QDoubleS
 QComboBox::drop-down {{ border: none; width: 22px; }}
 QComboBox QAbstractItemView {{ background: {SURFACE_2}; border: 1px solid {BORDER};
     selection-background-color: {ACCENT_DIM}; selection-color: {ACCENT}; outline: none; }}
-QTextBrowser, QListWidget, QScrollArea, QScrollArea > QWidget > QWidget {{ background: transparent; border: none; }}
+QTextBrowser, QListWidget, QScrollArea, QScrollArea > QWidget > QWidget {{
+    background: transparent; border: none; }}
 QListWidget::item {{ padding: 8px 6px; border-radius: 8px; }}
 QListWidget::item:hover {{ background: {SURFACE_2}; }}
 QListWidget::item:selected {{ background: {ACCENT_DIM}; color: {ACCENT}; }}

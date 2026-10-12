@@ -1,0 +1,4 @@
+# NVIDIA runtime libraries for faster-whisper on the GPU (installed by run.bat when
+# nvidia-smi is present). CUDA 12.8+ cuBLAS / cuDNN 9 support RTX 50xx (Blackwell).
+nvidia-cublas-cu12==12.8.4.1
+nvidia-cudnn-cu12==9.10.2.21

@@ -32,9 +32,7 @@ class LocalSqliteBibleProvider:
                 f"Bible database not found at {self.db_path}. "
                 "Run run.bat or: python scripts\\download_bibles.py"
             )
-        self._conn = sqlite3.connect(
-            f"file:{self.db_path}?mode=ro", uri=True, check_same_thread=False
-        )
+        self._conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, check_same_thread=False)
         self._lock = threading.Lock()
         with self._lock:
             rows = self._conn.execute("SELECT id, name, license FROM versions").fetchall()

@@ -16,7 +16,9 @@ from vachan.core.paths import LOGS_DIR
 def setup_logging() -> None:
     """App log to logs/vachan.log; uncaught exceptions are logged, never shown raw."""
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(LOGS_DIR / "vachan.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+    handler = RotatingFileHandler(
+        LOGS_DIR / "vachan.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+    )
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     logging.basicConfig(level=logging.INFO, handlers=[handler, logging.StreamHandler()])
 
