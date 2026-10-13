@@ -11,7 +11,6 @@ Options: --device cpu|cuda|auto, --model NAME (overrides the GPU/CPU default).
 from __future__ import annotations
 
 import argparse
-import io
 import sys
 import time
 import wave
@@ -31,7 +30,7 @@ from vachan.parser import ReferenceParser  # noqa: E402
 from vachan.stt.transcriber import WhisperTranscriber  # noqa: E402
 
 JOHN_3_16 = BibleReference("JHN", "John", 3, 16)
-# (gTTS voice, phrase, expected reference, context for follow-ups)
+# (TTS voice, phrase, expected reference, context for follow-ups)
 SAMPLES = [
     ("en", "Turn to John chapter three verse sixteen", "John 3:16", None),
     ("en", "Turn to John chapter 3 verse 16", "John 3:16", None),
@@ -45,18 +44,26 @@ SAMPLES = [
 SAMPLE_DIR = APP_DIR / "tmp" / "speech_samples"
 
 
+VOICES = {"en": "en-IN-PrabhatNeural", "hi": "hi-IN-MadhurNeural"}  # Indian accents
+
+
 def synthesize(voice: str, text: str, index: int) -> Path:
-    """gTTS -> 16 kHz mono WAV with 0.5 s lead-in and 2.5 s tail of silence (cached)."""
+    """edge-tts -> 16 kHz mono WAV with 0.5 s lead-in and 2.5 s tail of silence (cached)."""
+    voice = VOICES.get(voice, voice)
     path = SAMPLE_DIR / f"sample_{index}_{voice}.wav"
     if path.exists():
         return path
+    import asyncio
+
+    import edge_tts
     import miniaudio
-    from gtts import gTTS
     from scipy.signal import resample_poly
 
-    buf = io.BytesIO()
-    gTTS(text=text, lang=voice).write_to_fp(buf)
-    dec = miniaudio.decode(buf.getvalue(), nchannels=1, output_format=miniaudio.SampleFormat.FLOAT32)
+    async def fetch() -> bytes:
+        chunks = [c["data"] async for c in edge_tts.Communicate(text, voice).stream() if c["type"] == "audio"]
+        return b"".join(chunks)
+
+    dec = miniaudio.decode(asyncio.run(fetch()), nchannels=1, output_format=miniaudio.SampleFormat.FLOAT32)
     audio = resample_poly(np.array(dec.samples, np.float32), 16000, dec.sample_rate)
     audio = np.concatenate([np.zeros(8000), audio, np.zeros(40000)])
     write_wav(path, audio)
