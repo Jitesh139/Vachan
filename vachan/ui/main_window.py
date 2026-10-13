@@ -668,7 +668,14 @@ class ControlWindow(QMainWindow):
         )
         cursor.insertHtml(chip)
         self.transcript.ensureCursorVisible()
-        if should_auto_show(s, self.settings):
+        air = self.on_air
+        if s.action == "upgrade" and air and air.is_guess and air.reference.key[:2] == s.reference.key[:2]:
+            # the operator already put the guessed verse on air; the spoken verse replaces it
+            self.pending = s
+            self.approve()
+            self.status.setText(f"Upgraded on air: {air.reference.format_reference()} -> "
+                                f"{s.reference.format_reference()}")
+        elif should_auto_show(s, self.settings):
             self.pending = s
             self.approve()
             self.status.setText(f"Auto-shown {s.reference.format_reference()}")
@@ -689,7 +696,8 @@ class ControlWindow(QMainWindow):
             self.conf_badge.hide()
             self._card_state("")
             return
-        self.sug_ref.setText(f"{s.reference.format_reference()}  ·  {s.primary.version}")
+        guess = "  (verse? guessed)" if s.is_guess else ""
+        self.sug_ref.setText(f"{s.reference.format_reference()}{guess}  ·  {s.primary.version}")
         self.sug_ref.setStyleSheet("")
         self.sug_text.setStyleSheet("")
         self.sug_text.setText(s.primary.text)
