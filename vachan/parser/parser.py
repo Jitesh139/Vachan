@@ -225,7 +225,9 @@ class ReferenceParser:
     def _skip_fillers(self, tokens: list[str], i: int, limit: int) -> tuple[int, bool, bool]:
         chapter_cue = verse_cue = False
         for _ in range(4):
-            if i + 1 < limit and tokens[i] in CONJUNCTIONS and tokens[i + 1] in FILLERS:
+            if i + 1 < limit and tokens[i] in CONJUNCTIONS and (
+                tokens[i + 1] in FILLERS or tokens[i - 1] in CHAPTER_CUES  # "91 अध्याय और 2 पद"
+            ):
                 i += 1
             if i < limit and tokens[i] in FILLERS:
                 chapter_cue |= tokens[i] in CHAPTER_CUES
