@@ -79,7 +79,7 @@ def test_transcript_to_suggestion_with_both_languages(bible):
     assert s.reference.format_reference() == "John 3:16"
     assert s.primary.version == "KJV" and "For God so loved" in s.primary.text
     assert s.secondary.version == "HIN_IRV" and "परमेश्वर" in s.secondary.text
-    assert "MATCH John 3:16" in got["debug"][0].parser_output
+    assert "action=new ref=John 3:16 verse_source=spoken" in got["debug"][0].parser_output
 
 
 def test_reference_split_across_windows(bible):

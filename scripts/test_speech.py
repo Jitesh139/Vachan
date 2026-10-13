@@ -93,7 +93,7 @@ def run_direct(worker: PipelineWorker, audio: np.ndarray, expected: str | None) 
     """Whole clip through Whisper, then the pipeline's own parse + lookup code."""
     t = worker.transcriber.transcribe(audio)
     print(f"  transcript ({t.language}, {t.seconds:.2f}s): {t.text!r}")
-    worker._state.texts.clear()
+    worker._state = type(worker._state)()
     line, suggestion = worker._handle_text(t.text)
     return report(line, suggestion, expected)
 

@@ -71,12 +71,18 @@ class Suggestion:
     result: ParseResult
     primary: Passage
     secondary: Optional[Passage] = None  # Hindi alongside English (or vice versa)
+    action: str = "new"  # new | guess (verse 1 assumed) | upgrade (verse added to a guess)
 
     @property
     def reference(self) -> BibleReference:
         """The detected reference (always set for a suggestion)."""
         assert self.result.reference is not None
         return self.result.reference
+
+    @property
+    def is_guess(self) -> bool:
+        """True when the verse number was not spoken and verse 1 was assumed."""
+        return "verse_guessed" in self.result.low_confidence_reasons
 
     @property
     def warnings(self) -> tuple[str, ...]:

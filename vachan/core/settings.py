@@ -41,6 +41,8 @@ class Settings:
     auto_show: bool = False  # Manual Approve is the safe default for live streams
     auto_show_threshold: float = 0.9
     duplicate_cooldown_sec: float = 45.0
+    verse_wait_sec: float = 3.0  # chapter heard: wait this long for a verse before guessing 1
+    context_sec: float = 15.0  # transcript kept for the parser (joins "Psalms 91" + "verse 2")
     save_debug_audio: bool = False
 
     @classmethod

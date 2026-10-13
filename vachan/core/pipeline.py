@@ -82,12 +82,24 @@ def _pipeline_logger() -> logging.Logger:
 
 @dataclass
 class _State:
-    context: Optional[BibleReference] = None
-    texts: deque = field(default_factory=lambda: deque(maxlen=2))
-    recent: dict = field(default_factory=dict)  # ref key -> time suggested
+    context: Optional[BibleReference] = None  # reference on screen ("next verse" base)
+    texts: deque = field(default_factory=lambda: deque(maxlen=3))  # (time, text) for the parser
+    recent: dict = field(default_factory=dict)  # ref key (incl. verse) -> time suggested
     last_follow_up: float = 0.0
-    pending_chapter: Optional[tuple] = None  # chapter-only match awaiting a verse
+    pending: Optional[ParseResult] = None  # chapter-only match awaiting its verse
+    pending_since: float = 0.0
+    guessed: dict = field(default_factory=dict)  # (book, chapter, name) -> time a guess went out
     shown_text: str = ""
+
+    def outstanding(self, now: float, keep: float) -> Optional[BibleReference]:
+        """Chapter still waiting for (or guessed without) a spoken verse."""
+        if self.pending:
+            return self.pending.reference
+        live = [(t, k) for k, t in self.guessed.items() if now - t < keep]
+        if not live:
+            return None
+        book, chapter, name = max(live)[1]
+        return BibleReference(book, name, chapter, None)
 
 
 class PipelineWorker:
@@ -110,6 +122,7 @@ class PipelineWorker:
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._trace = _pipeline_logger()
+        self._clock = time.monotonic  # injectable for tests
 
     @property
     def running(self) -> bool:
@@ -210,60 +223,110 @@ class PipelineWorker:
         )
         if rms < s.silence_rms or not self.transcriber.has_speech(audio):
             self._emit_debug(info, "", "-", 0.0, "", "skipped: silence (no speech detected)")
+            self._emit(self._check_pending(), stop)
             return
         saved = self._save_audio(audio) if s.save_debug_audio else None
         t = self.transcriber.transcribe(audio)
         text = t.text if t.text.lower().strip(" .!") not in HALLUCINATIONS else ""
+        parse_input = (self._parse_text() + " " + text).strip()
         result_line, suggestion = self._handle_text(text)
-        self._emit_debug(info, t.text, t.language, t.seconds, self._parse_text(), result_line, saved)
+        if suggestion is None:
+            suggestion = self._check_pending()
+        self._emit_debug(info, t.text, t.language, t.seconds, parse_input, result_line, saved)
         if text:
             fresh = new_words(self._state.shown_text, text)
             self._state.shown_text = text
             if fresh:
                 self.events.transcript(fresh, t.language)
+        self._emit(suggestion, stop)
+
+    def _emit(self, suggestion: Optional[Suggestion], stop: Optional[threading.Event]) -> None:
         if suggestion and not (stop and stop.is_set()):
             self.events.suggestion(suggestion)
 
     def _parse_text(self) -> str:
-        return " ".join(self._state.texts)
+        return " ".join(text for _, text in self._state.texts)
 
     def _handle_text(self, text: str) -> tuple[str, Optional[Suggestion]]:
+        """Parse the rolling text buffer after new committed text; decide and log."""
         if not text:
             return "no match: empty transcript", None
-        st = self._state
-        st.texts.append(text)
-        with self._lock:
-            context = st.context
-        result = self.parser.parse(self._parse_text(), context_reference=context)
+        st, s = self._state, self.settings
+        now = self._clock()
+        st.texts.append((now, text))
+        while st.texts and now - st.texts[0][0] > s.context_sec:
+            st.texts.popleft()  # old words must not join with new numbers
+        result = self._parse(self._parse_text(), now)
         if result is None:
             return "no match: no book name followed by chapter/verse numbers", None
         if not result.is_valid:
             return f"no match: '{result.raw_match}' is not a real chapter/verse", None
         ref = result.reference
-        now = time.monotonic()
-        label = f"{ref.format_reference()} (conf {result.confidence:.2f})"
-        if result.is_follow_up:
+        chapter = (ref.book_id, ref.chapter, ref.book_name)
+        if ref.verse_start is None:  # the verse number may still be coming: wait, never default
+            if chapter in st.guessed:
+                return self._decision("duplicate", result, "none"), None
+            if st.pending is None or st.pending.reference.key != ref.key:
+                st.pending, st.pending_since = result, now
+            return self._decision("waiting", result, "none"), None
+        if result.is_follow_up and now - st.last_follow_up < s.window_sec + s.step_sec:
             # the same "next verse" phrase stays inside overlapping windows for a while
-            if now - st.last_follow_up < self.settings.window_sec + self.settings.step_sec:
-                return f"duplicate follow-up ignored: {label}", None
-        elif now - st.recent.get(ref.key, -1e9) < self.settings.duplicate_cooldown_sec:
-            return f"duplicate ignored: {label}", None
-        if ref.verse_start is None:
-            if st.pending_chapter != ref.key:  # the verse number may still be coming
-                st.pending_chapter = ref.key
-                return f"waiting for a verse number: {label}", None
-        st.pending_chapter = None
-        suggestion = self.build_suggestion(result)
+            return self._decision("duplicate", result, "spoken"), None
+        if not result.is_follow_up and now - st.recent.get(ref.key, -1e9) < s.duplicate_cooldown_sec:
+            return self._decision("duplicate", result, "spoken"), None
+        action = "upgrade" if chapter in st.guessed else "new"
+        suggestion = self.build_suggestion(result, action)
         if suggestion is None:
-            return f"no text in Bible database for {label}", None
+            return f"no text in Bible database for {ref.format_reference()}", None
+        st.pending = None  # a complete reference resolves (or supersedes) any waiting chapter
+        st.guessed.pop(chapter, None)
         st.recent = {k: v for k, v in st.recent.items() if now - v < 600}
         st.recent[ref.key] = now
         if result.is_follow_up:
             st.last_follow_up = now
         st.texts.clear()  # the matched words must not trigger again
-        return f"MATCH {label} {list(result.low_confidence_reasons)}", suggestion
+        return self._decision(action, result, "spoken"), suggestion
 
-    def build_suggestion(self, result: ParseResult) -> Optional[Suggestion]:
+    def _parse(self, text: str, now: float) -> Optional[ParseResult]:
+        """'verse 2' completes a chapter still waiting for its verse before it means
+        'verse 2 of what is on screen'; 'next verse' is always relative to the screen."""
+        st = self._state
+        outstanding = st.outstanding(now, self.settings.duplicate_cooldown_sec)
+        if outstanding is not None:
+            result = self.parser.parse(text, context_reference=outstanding)
+            if result and result.is_valid and result.reference.verse_start is not None:
+                return result
+        with self._lock:
+            context = st.context
+        return self.parser.parse(text, context_reference=context)
+
+    def _check_pending(self) -> Optional[Suggestion]:
+        """No verse followed the chapter in time: suggest verse 1, marked as a guess."""
+        st = self._state
+        now = self._clock()
+        if st.pending is None or now - st.pending_since < self.settings.verse_wait_sec:
+            return None
+        result, st.pending = st.pending, None
+        ref = result.reference
+        suggestion = self.build_suggestion(result, "guess")
+        st.guessed[(ref.book_id, ref.chapter, ref.book_name)] = now
+        st.recent[ref.key] = now
+        # buffer kept: a late "verse 2" still joins "Psalms 91" and upgrades the guess
+        self._trace.info("  " + self._decision("guess", result, "default"))
+        return suggestion
+
+    def _decision(self, action: str, result: ParseResult, verse_source: str) -> str:
+        """One log line per parse decision (also shown in the debug panel)."""
+        ref = result.reference
+        shown = ref.format_reference() + (":1 (GUESS)" if action == "guess" else "")
+        match = "MATCH " if action in ("new", "upgrade", "guess") else ""
+        return (
+            f"{match}action={action} ref={shown} verse_source={verse_source} "
+            f"conf={result.confidence:.2f} match={result.raw_match!r} "
+            f"reasons={list(result.low_confidence_reasons)}"
+        )
+
+    def build_suggestion(self, result: ParseResult, action: str = "new") -> Optional[Suggestion]:
         """Attach verse text in the primary (+ secondary) translation.
 
         A chapter-only result becomes an explicit verse-1 guess, flagged "verse_guessed"
@@ -284,7 +347,7 @@ class PipelineWorker:
         other = s.secondary_version if s.secondary_version != primary.version else s.primary_version
         if other and other != primary.version:
             secondary = self.bible.get_passage(ref, other)
-        return Suggestion(result, primary, secondary)
+        return Suggestion(result, primary, secondary, action)
 
     # ------------------------------------------------------------------ telemetry
     def _emit_debug(self, info, raw, lang, secs, parsed, result, saved=None) -> None:

@@ -70,7 +70,7 @@ def main() -> int:
     win._set_suggestion(third)
     win.btn_debug.setChecked(True)
     mic = "Microphone (USB Audio Mixer)"
-    match = "MATCH Psalms 23:1 (conf 1.00)"
+    match = "MATCH action=new ref=Psalms 23:1 verse_source=spoken conf=1.00"
     win._on_debug(ChunkDebugInfo("10:42:07.512", 0.0412, 7.0, mic, 48000, third_text, "en", 0.34, "", match))
     win.resize(1280, 800)
     win.show()
