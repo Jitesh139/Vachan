@@ -7,3 +7,4 @@ faster-whisper==1.2.1
 ctranslate2==4.8.2
 huggingface_hub==1.32.0
 rapidfuzz==3.14.6
+psutil==7.2.2

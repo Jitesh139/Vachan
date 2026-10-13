@@ -47,11 +47,11 @@ class Transcriber(Protocol):
     def load(self, progress: Optional[Callable[[str], None]] = None) -> None:
         """Load (and download if needed) the model; idempotent."""
 
-    def has_speech(self, audio: np.ndarray) -> bool:
-        """Cheap voice-activity check."""
+    def speech_spans(self, audio: np.ndarray, min_silence: float = 0.5) -> list[tuple[float, float]]:
+        """Voice activity: (start, end) seconds of speech; a span closes after min_silence."""
 
-    def transcribe(self, audio: np.ndarray) -> Transcript:
-        """Transcribe 16 kHz mono float32 audio."""
+    def transcribe(self, audio: np.ndarray, language: Optional[str] = None) -> Transcript:
+        """Transcribe 16 kHz mono float32 audio; language None = detect (hi/en)."""
 
 
 class BibleProvider(Protocol):

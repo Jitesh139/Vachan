@@ -1,15 +1,18 @@
 """Speech -> reference -> verse pipeline on a worker thread. Pure domain code: talks to
 audio, STT and Bible lookup only through the ports, and to the UI through callbacks.
 
-Each step (1.5 s) the newest 7 s of audio is transcribed, so a spoken reference is
-always complete inside some window. The parser sees the previous + current window
-text (the rolling text buffer) and returns the newest reference; repeats of the same
-reference from overlapping windows are suppressed by a cooldown.
+VAD endpointing: each tick looks at the audio since the open speech segment began.
+When the speaker pauses (endpoint_sec of silence) the segment is transcribed ONCE and
+appended to the rolling text buffer the parser reads; run-on speech is cut at
+max_segment_sec at the longest short pause. While a segment is open it is re-transcribed
+every partial_sec for the live transcript only. A reference is committed from a partial
+only when two partials in a row agree on it and more words follow it (so it cannot still
+be growing, e.g. "verse 2" -> "verse 21"); otherwise it is committed at the endpoint.
+Language is detected once per stretch of speech and reused until lang_reset_sec of silence.
 """
 
 from __future__ import annotations
 
-import difflib
 import logging
 import re
 import threading
@@ -30,6 +33,12 @@ from vachan.core.settings import Settings
 
 log = logging.getLogger(__name__)
 STALL_SECONDS = 3.0  # no audio blocks for this long = device lost
+SR = 16000
+TICK_SEC = 0.25
+LOOKBACK_SEC = 1.0  # idle: audio searched for the start of speech
+PAD_SEC = 0.25  # audio kept around detected speech
+PARTIAL_BUDGET_SEC = 1.0  # skip a partial expected to take longer (delays the endpoint)
+FOLLOW_UP_GUARD_SEC = 5.0  # one "next verse" phrase seen by a partial and again by the final
 # Whole-transcript hallucinations Whisper produces on noise/music
 HALLUCINATIONS = {"thank you", "thanks for watching", "धन्यवाद", "subscribe", "you"}
 
@@ -43,27 +52,18 @@ class PipelineEvents:
     """Callbacks to the UI; invoked on the worker thread."""
 
     status: Callable[[str], None] = _noop
-    transcript: Callable[[str, str], None] = _noop  # new words, language
+    transcript: Callable[[str, str], None] = _noop  # committed segment text, language
+    partial: Callable[[str, str], None] = _noop  # unfinished segment text (replaces previous)
+    latency: Callable[[float], None] = _noop  # end of phrase -> suggestion, seconds
     suggestion: Callable[[Suggestion], None] = _noop
     error: Callable[[str], None] = _noop
     debug: Callable[[ChunkDebugInfo], None] = _noop
 
 
-def new_words(previous: str, current: str) -> str:
-    """Words of `current` not already shown from the overlapping `previous` window."""
-    prev, cur = previous.split(), current.split()
-    if not prev:
-        return current
-
-    def norm(words: list[str]) -> list[str]:
-        return [re.sub(r"[^\wऀ-ॿ]", "", w.lower()) for w in words]
-
-    matcher = difflib.SequenceMatcher(None, norm(prev), norm(cur), autojunk=False)
-    blocks = [b for b in matcher.get_matching_blocks() if b.size >= 2]
-    if not blocks:
-        return current
-    last = max(blocks, key=lambda b: b.b + b.size)
-    return " ".join(cur[last.b + last.size :])
+def _ends_with(text: str, raw_match: str) -> bool:
+    """True if the matched reference is the last thing said (its number may still grow)."""
+    words = re.findall(r"[\w\u0900-\u097f]+", text.lower())
+    return bool(words) and words[-1] == raw_match.split()[-1]
 
 
 def _pipeline_logger() -> logging.Logger:
@@ -89,7 +89,6 @@ class _State:
     pending: Optional[ParseResult] = None  # chapter-only match awaiting its verse
     pending_since: float = 0.0
     guessed: dict = field(default_factory=dict)  # (book, chapter, name) -> time a guess went out
-    shown_text: str = ""
 
     def outstanding(self, now: float, keep: float) -> Optional[BibleReference]:
         """Chapter still waiting for (or guessed without) a spoken verse."""
@@ -100,6 +99,20 @@ class _State:
             return None
         book, chapter, name = max(live)[1]
         return BibleReference(book, name, chapter, None)
+
+
+@dataclass
+class _Segment:
+    """Endpointing state, in stream seconds (audio clock)."""
+
+    start: Optional[float] = None  # open segment began here; None = waiting for speech
+    last_end: float = 0.0  # previous segment ended here (never re-read)
+    seen: float = 0.0  # stream time at the previous tick
+    partial_len: float = 0.0  # segment length at the last partial
+    partial_key: Optional[tuple] = None  # complete reference seen by the last partial
+    committed: bool = False  # a stable partial already produced this segment's suggestion
+    language: Optional[str] = None  # reused until a long silence; None = detect
+    last_speech: float = -1e9  # speech last ended here
 
 
 class PipelineWorker:
@@ -123,6 +136,8 @@ class PipelineWorker:
         self._thread: Optional[threading.Thread] = None
         self._trace = _pipeline_logger()
         self._clock = time.monotonic  # injectable for tests
+        self._seg = _Segment()
+        self._rtf = 0.5  # running STT seconds per audio second (partial budget)
 
     @property
     def running(self) -> bool:
@@ -159,16 +174,14 @@ class PipelineWorker:
             return
         if not self._open_audio():
             return
+        self._seg = _Segment()  # a new stream restarts the audio clock
         self.events.status(
             f"Listening on {self.audio.device_name} - Whisper {self.transcriber.model_name} "
             f"on {self.transcriber.device.upper()}"
         )
         errors = 0
-        next_tick = time.monotonic()
         while not stop.is_set():
-            next_tick += self.settings.step_sec
-            stop.wait(max(0.0, next_tick - time.monotonic()))
-            next_tick = max(next_tick, time.monotonic())  # never queue up stale work
+            stop.wait(TICK_SEC)  # STT time is not added on top: audio waits in the ring
             if stop.is_set():
                 break
             if self.audio.seconds_since_audio() > STALL_SECONDS:
@@ -202,6 +215,7 @@ class PipelineWorker:
                 self.audio.start()
                 stop.wait(1.0)
                 if self.audio.seconds_since_audio() < STALL_SECONDS:
+                    self._seg = _Segment()
                     self.events.status(f"Audio restored: {self.audio.device_name}")
                     return
             except Exception as e:
@@ -209,35 +223,105 @@ class PipelineWorker:
             stop.wait(3.0)
 
     def _tick(self, stop: Optional[threading.Event] = None) -> None:
-        s = self.settings
-        audio = self.audio.read_latest(s.window_sec)
-        if len(audio) < 16000:
+        """One endpointing step: open, extend, partially transcribe or close a segment."""
+        s, seg = self.settings, self._seg
+        if seg.start is None:
+            audio, now = self.audio.read_since(max(seg.last_end, seg.seen - LOOKBACK_SEC))
+            seg.seen = now
+            spans = self._spans(audio)
+            if not spans:
+                self._emit(self._check_pending(), stop)
+                return
+            seg.start = max(seg.last_end, now - len(audio) / SR + spans[0][0] - PAD_SEC)
+            seg.partial_len, seg.partial_key, seg.committed = 0.0, None, False
+            if seg.start - seg.last_speech > s.lang_reset_sec:
+                seg.language = None  # long silence: the next speaker may use the other language
+        audio, now = self.audio.read_since(seg.start)
+        seg.seen = now
+        begin, dur = now - len(audio) / SR, len(audio) / SR
+        spans = self._spans(audio)
+        if not spans:
+            if dur > 1.0:
+                seg.start = None  # noise that only looked like speech
             return
-        rms = float(np.sqrt(np.mean(audio * audio)))
+        speech_end = spans[-1][1]
+        if dur - speech_end >= s.endpoint_sec:  # the speaker paused: commit the segment
+            cut = min(dur, speech_end + PAD_SEC)
+            seg.start, seg.last_end, seg.last_speech = None, begin + cut, begin + speech_end
+            self._final(audio[: int(cut * SR)], begin + speech_end, stop)
+        elif dur >= s.max_segment_sec:  # run-on speech: commit up to the best short pause
+            cut = self._cut_point(audio, dur)
+            seg.start = seg.last_end = seg.last_speech = begin + cut
+            self._final(audio[: int(cut * SR)], begin + cut, stop)
+            seg.partial_len, seg.partial_key, seg.committed = 0.0, None, False
+        elif s.partial_sec and dur - seg.partial_len >= s.partial_sec:
+            seg.partial_len = dur
+            if self._rtf * dur > PARTIAL_BUDGET_SEC:
+                return  # this machine is too slow for a partial of this length
+            self._partial(audio, stop)
+
+    def _spans(self, audio: np.ndarray, min_silence: Optional[float] = None) -> list:
+        if len(audio) < SR // 4 or float(np.sqrt(np.mean(audio * audio))) < self.settings.silence_rms:
+            return []
+        return self.transcriber.speech_spans(audio, min_silence or self.settings.endpoint_sec)
+
+    def _cut_point(self, audio: np.ndarray, dur: float) -> float:
+        """Middle of the longest short pause in the second half, else the end."""
+        spans = self._spans(audio, 0.1)
+        gaps = [(b[0] - a[1], (a[1] + b[0]) / 2) for a, b in zip(spans, spans[1:])]
+        gaps = [g for g in gaps if g[1] >= dur / 2]
+        return max(gaps)[1] if gaps else dur
+
+    def _stream_now(self) -> float:
+        return self.audio.read_since(1e9)[1]  # a read from the future is empty: just the clock
+
+    def _transcribe(self, audio: np.ndarray, kind: str):
+        """STT with language reuse, hallucination filter, debug telemetry."""
+        s, seg = self.settings, self._seg
+        saved = self._save_audio(audio) if s.save_debug_audio and kind == "final" else None
+        t = self.transcriber.transcribe(audio, seg.language)
+        seg.language = t.language
+        dur = len(audio) / SR
+        self._rtf = 0.7 * self._rtf + 0.3 * (t.seconds / max(dur, 0.5))
+        text = t.text if t.text.lower().strip(" .!") not in HALLUCINATIONS else ""
         info = dict(
             timestamp=datetime.now().strftime("%H:%M:%S.%f")[:-3],
-            rms=rms,
-            chunk_length_sec=len(audio) / 16000,
+            rms=float(np.sqrt(np.mean(audio * audio))) if len(audio) else 0.0,
+            chunk_length_sec=dur,
             device=self.audio.device_name,
             sample_rate=self.audio.sample_rate,
         )
-        if rms < s.silence_rms or not self.transcriber.has_speech(audio):
-            self._emit_debug(info, "", "-", 0.0, "", "skipped: silence (no speech detected)")
-            self._emit(self._check_pending(), stop)
-            return
-        saved = self._save_audio(audio) if s.save_debug_audio else None
-        t = self.transcriber.transcribe(audio)
-        text = t.text if t.text.lower().strip(" .!") not in HALLUCINATIONS else ""
+        return t, text, info, saved
+
+    def _final(self, audio: np.ndarray, speech_end: float, stop) -> None:
+        t, text, info, saved = self._transcribe(audio, "final")
+        if text:
+            self.events.transcript(text, t.language)
         parse_input = (self._parse_text() + " " + text).strip()
-        result_line, suggestion = self._handle_text(text)
+        line, suggestion = self._handle_text(text)
         if suggestion is None:
             suggestion = self._check_pending()
-        self._emit_debug(info, t.text, t.language, t.seconds, parse_input, result_line, saved)
-        if text:
-            fresh = new_words(self._state.shown_text, text)
-            self._state.shown_text = text
-            if fresh:
-                self.events.transcript(fresh, t.language)
+        self._emit_debug(info, t.text, t.language, t.seconds, parse_input, f"[final] {line}", saved)
+        if suggestion and suggestion.action != "guess":
+            self.events.latency(max(0.0, self._stream_now() - speech_end))
+        self._emit(suggestion, stop)
+
+    def _partial(self, audio: np.ndarray, stop) -> None:
+        seg = self._seg
+        t, text, info, _ = self._transcribe(audio, "partial")
+        self.events.partial(text, t.language)
+        line, suggestion = "partial: no complete reference", None
+        result = self._parse((self._parse_text() + " " + text).strip(), self._clock()) if text else None
+        complete = result and result.is_valid and result.reference.verse_start is not None
+        key = result.reference.key if complete and not _ends_with(text, result.raw_match) else None
+        if key and key == seg.partial_key and not seg.committed:
+            line, suggestion = self._handle_text(text)  # stable: commit before the speaker pauses
+            seg.committed = suggestion is not None
+            line = f"stable partial: {line}"
+        seg.partial_key = key
+        self._emit_debug(info, t.text, t.language, t.seconds, text, f"[partial] {line}")
+        if suggestion:
+            self.events.latency(t.seconds)
         self._emit(suggestion, stop)
 
     def _emit(self, suggestion: Optional[Suggestion], stop: Optional[threading.Event]) -> None:
@@ -269,8 +353,8 @@ class PipelineWorker:
             if st.pending is None or st.pending.reference.key != ref.key:
                 st.pending, st.pending_since = result, now
             return self._decision("waiting", result, "none"), None
-        if result.is_follow_up and now - st.last_follow_up < s.window_sec + s.step_sec:
-            # the same "next verse" phrase stays inside overlapping windows for a while
+        if result.is_follow_up and now - st.last_follow_up < FOLLOW_UP_GUARD_SEC:
+            # the same "next verse" phrase is seen by a stable partial and again by the final
             return self._decision("duplicate", result, "spoken"), None
         if not result.is_follow_up and now - st.recent.get(ref.key, -1e9) < s.duplicate_cooldown_sec:
             return self._decision("duplicate", result, "spoken"), None

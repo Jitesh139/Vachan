@@ -64,7 +64,7 @@ class SettingsDialog(QDialog):
         self.silence = QDoubleSpinBox(
             decimals=4, minimum=0.0, maximum=0.05, singleStep=0.0005, value=s.silence_rms
         )
-        self.silence.setToolTip("Windows quieter than this RMS are skipped without running Whisper")
+        self.silence.setToolTip("Audio quieter than this RMS is not even checked for speech")
         form.addRow("Silence threshold", self.silence)
 
         form.addRow(_section("Speech recognition"))
@@ -81,12 +81,14 @@ class SettingsDialog(QDialog):
             [("Hindi + English (auto per sentence)", "auto"), ("Hindi", "hi"), ("English", "en")], s.language
         )
         form.addRow("Language", self.language)
-        self.window = QDoubleSpinBox(
-            minimum=4.0, maximum=12.0, singleStep=0.5, value=s.window_sec, suffix=" s"
+        self.endpoint = QDoubleSpinBox(
+            minimum=0.3, maximum=1.5, singleStep=0.1, value=s.endpoint_sec, suffix=" s"
         )
-        form.addRow("Audio window", self.window)
-        self.step = QDoubleSpinBox(minimum=0.5, maximum=4.0, singleStep=0.25, value=s.step_sec, suffix=" s")
-        form.addRow("Update every", self.step)
+        self.endpoint.setToolTip("A pause this long ends a phrase; the phrase is then transcribed once")
+        form.addRow("Pause that ends a phrase", self.endpoint)
+        self.partial = QCheckBox("Show words while the speaker is still talking")
+        self.partial.setChecked(s.partial_sec > 0)
+        form.addRow("Live transcript", self.partial)
         self.prompt = QPlainTextEdit(s.initial_prompt)
         self.prompt.setFixedHeight(70)
         self.prompt.setToolTip("Vocabulary hint for Whisper. Never include chapter/verse numbers.")
@@ -107,7 +109,7 @@ class SettingsDialog(QDialog):
         form.addRow("Auto-show minimum confidence", self.threshold)
         self.cooldown = QSpinBox(minimum=5, maximum=600, value=round(s.duplicate_cooldown_sec), suffix=" s")
         form.addRow("Ignore repeats for", self.cooldown)
-        self.save_audio = QCheckBox("Save every audio window sent to Whisper (debug_audio/)")
+        self.save_audio = QCheckBox("Save every phrase sent to Whisper (debug_audio/)")
         self.save_audio.setChecked(s.save_debug_audio)
         form.addRow("", self.save_audio)
 
@@ -138,8 +140,8 @@ class SettingsDialog(QDialog):
             model_gpu=self.model_gpu.currentData(),
             model_cpu=self.model_cpu.currentData(),
             language=self.language.currentData(),
-            window_sec=self.window.value(),
-            step_sec=self.step.value(),
+            endpoint_sec=self.endpoint.value(),
+            partial_sec=1.0 if self.partial.isChecked() else 0.0,
             initial_prompt=self.prompt.toPlainText().strip(),
             primary_version=self.primary.currentData(),
             secondary_version=self.secondary.currentData(),

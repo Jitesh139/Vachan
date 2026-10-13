@@ -13,12 +13,21 @@ def refs(got):
 
 
 def test_regression_psalms_91_verse_2_split_across_windows(bible):  # noqa: F811
-    # exact sequence: verse number arrives after the book name scrolled out of the window
-    worker, got = make(["Psalms 91", "Psalms 91 verse", "verse 2."], bible)
-    for _ in range(3):
-        worker._tick()
-    assert refs(got)[-1] == "Psalms 91:2"
-    assert "Psalms 91:1" not in refs(got)
+    # exact transcripts from the bug: the verse number arrived after the book name had
+    # scrolled out of the old 7 s window; the guess 91:1 went out and cleared the buffer
+    worker, got = make([], bible)
+    for text in ["Psalms 91", "Psalms 91 verse", "verse 2."]:
+        _, s = worker._handle_text(text)
+        got["suggestions"] += [s] if s else []
+    assert refs(got) == ["Psalms 91:2"]
+
+
+def test_regression_psalms_91_verse_2_as_spoken_phrases(bible):  # noqa: F811
+    from tests.test_pipeline import utter
+
+    worker, got = make(["Psalms 91", "verse 2."], bible)  # speaker paused after the chapter
+    utter(worker, 2)
+    assert refs(got) == ["Psalms 91:2"]
 
 
 # ------------------------------------------------------------------ parser: one window

@@ -76,8 +76,8 @@ class StallingAudio:
     def get_level(self):
         return 0.0
 
-    def read_latest(self, seconds):
-        return np.zeros(int(seconds * 16000), np.float32)
+    def read_since(self, t):
+        return np.zeros(4000, np.float32), t + 0.25
 
     def seconds_since_audio(self):
         return 99.0 if self.unplugged else 0.0
@@ -89,10 +89,10 @@ class QuietSTT:
     def load(self, progress=None):
         pass
 
-    def has_speech(self, audio):
-        return False
+    def speech_spans(self, audio, min_silence=0.5):
+        return []
 
-    def transcribe(self, audio):
+    def transcribe(self, audio, language=None):
         return Transcript("", "en", 0.0)
 
 
@@ -107,7 +107,7 @@ def test_mic_unplug_reported_and_recovered():
             done.set()
 
     worker = PipelineWorker(
-        audio, QuietSTT(), ReferenceParser(), None, Settings(step_sec=0.05),
+        audio, QuietSTT(), ReferenceParser(), None, Settings(),
         PipelineEvents(error=errors.append, status=status),
     )  # fmt: skip
     worker.start()

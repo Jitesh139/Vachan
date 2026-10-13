@@ -27,6 +27,32 @@ log = logging.getLogger(__name__)
 Progress = Optional[Callable[[str], None]]
 
 
+MAX_NEW_TOKENS = 160  # >10 s of fast Hindi; bounds a hallucination loop
+
+
+def cpu_threads() -> int:
+    """Physical core count (logical cores add nothing for CTranslate2 / OpenVINO)."""
+    try:
+        import psutil
+
+        return psutil.cpu_count(logical=False) or 4
+    except ImportError:
+        return max(1, (os.cpu_count() or 8) // 2)
+
+
+def speech_spans(audio: np.ndarray, min_silence: float = 0.5) -> list[tuple[float, float]]:
+    """Silero VAD (bundled with faster-whisper): speech (start, end) in seconds.
+
+    A span only ends after `min_silence` of quiet, so `len(audio) - last end >= min_silence`
+    means the speaker has paused. A few ms per second of audio on CPU.
+    """
+    from faster_whisper.vad import VadOptions, get_speech_timestamps
+
+    opts = VadOptions(min_speech_duration_ms=250, min_silence_duration_ms=int(min_silence * 1000),
+                      speech_pad_ms=0)  # fmt: skip
+    return [(s["start"] / 16000, s["end"] / 16000) for s in get_speech_timestamps(audio, opts)]
+
+
 class ModelUnavailable(RuntimeError):
     """The Whisper model is not on disk and could not be downloaded."""
 
@@ -106,8 +132,7 @@ class WhisperTranscriber:
         path = self._ensure_downloaded(name, progress)
         progress(f"Loading Whisper '{name}' on {device.upper()} ({compute})...")
         t0 = time.perf_counter()
-        # more threads is slower on hybrid P/E-core CPUs (measured: 11 threads 2.5x slower than 8)
-        threads = min(8, max(1, (os.cpu_count() or 4) // 2))
+        threads = self.settings.cpu_threads or cpu_threads()
         model = WhisperModel(path, device=device, compute_type=compute, cpu_threads=threads)
         # warm-up: forces cuBLAS/cuDNN to load now, so failures trigger the CPU fallback
         segments, _ = model.transcribe(np.zeros(16000, np.float32), language="en")
@@ -160,17 +185,14 @@ class WhisperTranscriber:
             return 0
 
     # ------------------------------------------------------------------ inference
-    def has_speech(self, audio: np.ndarray) -> bool:
-        """Silero VAD (bundled with faster-whisper); a few ms per window on CPU."""
-        from faster_whisper.vad import VadOptions, get_speech_timestamps
+    def speech_spans(self, audio: np.ndarray, min_silence: float = 0.5) -> list[tuple[float, float]]:
+        return speech_spans(audio, min_silence)
 
-        return bool(get_speech_timestamps(audio, VadOptions(min_speech_duration_ms=250)))
-
-    def transcribe(self, audio: np.ndarray) -> Transcript:
-        """Transcribe one window; on a CUDA runtime error switch to CPU and retry once."""
+    def transcribe(self, audio: np.ndarray, language: Optional[str] = None) -> Transcript:
+        """Transcribe one segment; on a CUDA runtime error switch to CPU and retry once."""
         self.load()
         try:
-            return self._transcribe(audio)
+            return self._transcribe(audio, language)
         except RuntimeError as e:
             if self.device != "cuda":
                 raise
@@ -179,28 +201,29 @@ class WhisperTranscriber:
                 self._model = None
                 self.fallback_reason = f"GPU error ({e}); switched to CPU"
                 self._try_load(self.settings.model_cpu, "cpu", "int8", lambda m: None)
-            return self._transcribe(audio)
+            return self._transcribe(audio, language)
 
-    def _transcribe(self, audio: np.ndarray) -> Transcript:
+    def _transcribe(self, audio: np.ndarray, language: Optional[str]) -> Transcript:
         t0 = time.perf_counter()
-        language = self._pick_language(audio)
+        if self.settings.language in ("hi", "en"):
+            language = self.settings.language
+        elif language is None:
+            language = self._pick_language(audio)
         segments, _ = self._model.transcribe(
             audio.astype(np.float32, copy=False),
             language=language,
-            beam_size=self.settings.beam_size,
-            vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 500, "speech_pad_ms": 300},
+            beam_size=self.settings.beam_size if self.device == "cuda" else 1,
+            vad_filter=False,  # the pipeline already cut the audio to speech
             initial_prompt=self.settings.initial_prompt or None,
             condition_on_previous_text=False,
             without_timestamps=True,
-            temperature=[0.0, 0.2, 0.4],
+            temperature=0.0,  # no fallback re-decodes: a repetition loop cost 26 s on CPU
+            max_new_tokens=MAX_NEW_TOKENS,
         )
         text = " ".join(s.text.strip() for s in segments if s.no_speech_prob < 0.6)
         return Transcript(text.strip(), language, time.perf_counter() - t0)
 
     def _pick_language(self, audio: np.ndarray) -> str:
-        if self.settings.language in ("hi", "en"):
-            return self.settings.language
         _, _, probs = self._model.detect_language(audio, vad_filter=True)
         p = dict(probs)
         hindi, english = p.get("hi", 0.0) + p.get("ur", 0.0), p.get("en", 0.0)

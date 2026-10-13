@@ -25,14 +25,17 @@ class Settings:
 
     input_device: str = ""  # device name; "" = Windows default input
     input_gain: float = 1.0
-    window_sec: float = 7.0  # audio sent to Whisper each step
-    step_sec: float = 1.5  # how often a new window is transcribed
-    silence_rms: float = 0.002  # below this a window is skipped without STT
+    endpoint_sec: float = 0.5  # pause that ends a phrase (then it is transcribed once)
+    max_segment_sec: float = 10.0  # run-on speech is committed in pieces this long
+    partial_sec: float = 1.0  # live transcript refresh while speaking; 0 = off
+    lang_reset_sec: float = 3.0  # silence after which the language is detected again
+    silence_rms: float = 0.002  # below this audio is not even checked for speech
     device: str = "auto"  # auto | cuda | cpu
     model_gpu: str = "large-v3-turbo"
     model_cpu: str = "small"
     language: str = "auto"  # auto (Hindi/English per window) | hi | en
-    beam_size: int = 5
+    beam_size: int = 5  # GPU only; on CPU decoding is always greedy (beam 1)
+    cpu_threads: int = 0  # 0 = physical core count
     initial_prompt: str = DEFAULT_PROMPT
     primary_version: str = "KJV"
     secondary_version: str = "HIN_IRV"  # "" = show only one language
