@@ -180,6 +180,22 @@ def bench_one(name: str, threads: int) -> dict:
 
 
 # ------------------------------------------------------------------ driver
+def power_mode() -> str:
+    """Windows 11 power-mode slider (an overlay on the power plan)."""
+    import winreg
+
+    modes = {"00000000-0000-0000-0000-000000000000": "Balanced",
+             "ded574b5-45a0-4f42-8737-46345c09c238": "Best performance",
+             "961cc777-2547-4f9d-8174-7d86181b8a7a": "Best power efficiency"}  # fmt: skip
+    try:
+        path = r"SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes"
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path)
+        guid = winreg.QueryValueEx(key, "ActiveOverlayAcPowerScheme")[0]
+        return modes.get(guid, guid)
+    except OSError:
+        return "unknown"
+
+
 def machine_info() -> str:
     import psutil
 
@@ -190,6 +206,7 @@ def machine_info() -> str:
     if platform.system() == "Windows":
         out = subprocess.run(["powercfg", "/getactivescheme"], capture_output=True, text=True).stdout
         plan = out.strip().split("(")[-1].rstrip(")") if "(" in out else out.strip()
+        plan += f", power mode: {power_mode()}"
     return (
         f"{platform.processor() or platform.machine()} | {physical_cores()} physical cores, "
         f"{os.cpu_count()} logical | RAM {vm.total / 1e9:.1f} GB, {vm.available / 1e9:.1f} GB free | "
