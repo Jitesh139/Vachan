@@ -40,6 +40,7 @@ class _RingAudio:
             self._ring = np.zeros(int(sample_rate * self._buffer_sec), np.float32)
             self._pos = 0
             self._filled = 0
+            self._total = 0  # samples received since start (stream clock)
             self._level = 0.0
             self._last_block = time.monotonic()
 
@@ -60,6 +61,7 @@ class _RingAudio:
                     self._ring[: n - split] = mono[split:]
                 self._pos = end % size
                 self._filled = min(size, self._filled + n)
+            self._total += n
             rms = float(np.sqrt(np.mean(mono * mono))) if n else 0.0
             # dBFS-style meter: -60 dB -> 0, 0 dB -> 1
             level = max(0.0, min(1.0, 1 + 20 * math.log10(max(rms * self.gain, 1e-6)) / 60))
@@ -79,13 +81,26 @@ class _RingAudio:
     def read_latest(self, seconds: float) -> np.ndarray:
         """Latest `seconds` of audio, gain applied, as 16 kHz mono float32."""
         with self._lock:
-            n = min(self._filled, int(seconds * self.sample_rate))
-            start = (self._pos - n) % len(self._ring)
-            if start + n <= len(self._ring):
-                audio = self._ring[start : start + n].copy()
-            else:
-                audio = np.concatenate((self._ring[start:], self._ring[: (start + n) % len(self._ring)]))
-            sr = self.sample_rate
+            raw = self._slice(int(seconds * self.sample_rate))
+        return self._to_16k(raw)
+
+    def read_since(self, t: float) -> tuple[np.ndarray, float]:
+        """Audio from stream time `t` (seconds of audio since start) to now, and now."""
+        with self._lock:
+            now = self._total / self.sample_rate
+            raw = self._slice(self._total - int(t * self.sample_rate))
+        return self._to_16k(raw), now
+
+    def _slice(self, n: int) -> np.ndarray:
+        """Newest n native-rate samples; caller holds the lock."""
+        n = min(self._filled, max(0, n))
+        start = (self._pos - n) % len(self._ring)
+        if start + n <= len(self._ring):
+            return self._ring[start : start + n].copy()
+        return np.concatenate((self._ring[start:], self._ring[: (start + n) % len(self._ring)]))
+
+    def _to_16k(self, audio: np.ndarray) -> np.ndarray:
+        sr = self.sample_rate
         if sr != TARGET_SR and len(audio):
             g = math.gcd(sr, TARGET_SR)
             audio = resample_poly(audio, TARGET_SR // g, sr // g).astype(np.float32)

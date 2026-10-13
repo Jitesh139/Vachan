@@ -31,6 +31,9 @@ class AudioSource(Protocol):
     def read_latest(self, seconds: float) -> np.ndarray:
         """Most recent audio as 16 kHz mono float32."""
 
+    def read_since(self, t: float) -> tuple[np.ndarray, float]:
+        """16 kHz audio from stream time t (seconds since start) to now, and now."""
+
     def seconds_since_audio(self) -> float:
         """Time since the last audio block arrived (stall / unplug detection)."""
 
