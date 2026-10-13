@@ -40,6 +40,12 @@ SAMPLES = [
     ("en", "Now look at the next verse", "John 3:17", JOHN_3_16),
     ("hi", "रोमियों आठ अध्याय अट्ठाईस पद", "Romans 8:28", None),
     ("en", "Open your Bibles to first Corinthians thirteen four", "1 Corinthians 13:4", None),
+    ("en", "Please turn with me to Psalms 91 verse 2", "Psalms 91:2", None),
+    ("hi", "आज हम भजन संहिता 91 पद 2 पढ़ेंगे", "Psalms 91:2", None),
+    ("hi", "आज हम Psalms 91 verse 2 पढ़ेंगे", "Psalms 91:2", None),  # Hinglish
+    ("en", "Please turn with me to Psalms 91 | verse 2", "Psalms 91:2", None),  # "|" = 1.5 s pause
+    ("hi", "आज हम भजन संहिता 91 | पद 2 पढ़ेंगे", "Psalms 91:2", None),
+    ("en", "Please turn with me to Psalms 91", "Psalms 91:1 (GUESS)", None),  # chapter only
 ]
 SAMPLE_DIR = APP_DIR / "tmp" / "speech_samples"
 
@@ -48,9 +54,21 @@ VOICES = {"en": "en-IN-PrabhatNeural", "hi": "hi-IN-MadhurNeural"}  # Indian acc
 
 
 def synthesize(voice: str, text: str, index: int) -> Path:
-    """edge-tts -> 16 kHz mono WAV with 0.5 s lead-in and 2.5 s tail of silence (cached)."""
+    """edge-tts -> 16 kHz mono WAV with 0.5 s lead-in and 2.5 s tail of silence (cached).
+
+    'a | b' speaks a, pauses 1.5 s, then speaks b (a reference split by a pause).
+    """
     voice = VOICES.get(voice, voice)
     path = SAMPLE_DIR / f"sample_{index}_{voice}.wav"
+    if "|" in text:
+        if not path.exists():
+            texts = [t.strip() for t in text.split("|")]
+            parts = [read_wav(synthesize(voice, t, f"{index}_{k}")) for k, t in enumerate(texts)]
+            # each part: 0.5 s lead-in + speech + 2.5 s tail -> trim to a 1.5 s pause between parts
+            last = len(parts) - 1
+            parts = [x[(8000 if k else 0) : len(x) - (16000 if k < last else 0)] for k, x in enumerate(parts)]
+            write_wav(path, np.concatenate(parts))
+        return path
     if path.exists():
         return path
     import asyncio
@@ -93,31 +111,40 @@ def run_direct(worker: PipelineWorker, audio: np.ndarray, expected: str | None) 
     """Whole clip through Whisper, then the pipeline's own parse + lookup code."""
     t = worker.transcriber.transcribe(audio)
     print(f"  transcript ({t.language}, {t.seconds:.2f}s): {t.text!r}")
-    worker._state = type(worker._state)()
     line, suggestion = worker._handle_text(t.text)
+    if suggestion is None:  # chapter only: let the verse wait run out
+        worker._clock = lambda: time.monotonic() + worker.settings.verse_wait_sec + 1
+        suggestion = worker._check_pending()
+        worker._clock = time.monotonic
     return report(line, suggestion, expected)
 
 
 def run_realtime(worker: PipelineWorker, path: Path, expected: str | None) -> bool:
-    """Stream the file in real time through the live pipeline and time the suggestion."""
+    """Stream the file in real time through the live pipeline; the LAST suggestion counts
+    (a guess may be upgraded). Latency is the pipeline's own end-of-phrase measurement."""
     got: list = []
+    delays: list = []
     worker.events = PipelineEvents(
-        suggestion=lambda s: got.append((time.monotonic(), s)),
+        suggestion=got.append,
+        latency=delays.append,
         transcript=lambda text, lang: print(f"  transcript ({lang}): {text!r}"),
         error=lambda e: print(f"  ERROR: {e}"),
     )
     worker.audio = FileAudioSource(path, loop=False)
-    speech_end = len(read_wav(path)) / 16000 - 2.5  # tail silence added by synthesize()
-    start = time.monotonic()
     worker.start()
-    while not got and time.monotonic() - start < speech_end + 15:
-        time.sleep(0.05)
+    speech = len(read_wav(path)) / 16000 - 2.5  # tail silence added by synthesize()
+    time.sleep(speech + worker.settings.verse_wait_sec + 4)  # room for a guess and its upgrade
     worker.stop(wait=5)
-    if not got:
-        return report("no suggestion within timeout", None, expected)
-    latency = got[0][0] - start - speech_end
-    print(f"  latency after end of speech: {latency:.2f}s")
-    return report("MATCH", got[0][1], expected)
+    for s in got:
+        print(f"  suggestion: {label(s)} ({s.action})")
+    if delays:
+        print(f"  end of phrase -> suggestion: {delays[-1]:.2f}s")
+    return report("no suggestion" if not got else "MATCH", got[-1] if got else None, expected)
+
+
+def label(s) -> str:
+    """'Psalms 91:2', or 'Psalms 91:1 (GUESS)' when the verse was not spoken."""
+    return s.reference.format_reference() + (" (GUESS)" if s.is_guess else "")
 
 
 def report(line: str, suggestion, expected: str | None) -> bool:
@@ -126,7 +153,7 @@ def report(line: str, suggestion, expected: str | None) -> bool:
         print(f"  parser: {line}")
         ok = expected is None
     else:
-        ref = suggestion.reference.format_reference()
+        ref = label(suggestion)
         print(f"  reference: {ref}  (confidence {suggestion.result.confidence:.2f})")
         print(f"  verse [{suggestion.primary.version}]: {suggestion.primary.text[:110]}")
         if suggestion.secondary:
