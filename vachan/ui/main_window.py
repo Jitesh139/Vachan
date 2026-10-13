@@ -10,7 +10,15 @@ from dataclasses import asdict
 from typing import Optional
 
 from PySide6.QtCore import QObject, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QKeySequence, QLinearGradient, QPainter, QShortcut, QTextCursor
+from PySide6.QtGui import (
+    QColor,
+    QKeySequence,
+    QLinearGradient,
+    QPainter,
+    QShortcut,
+    QTextCharFormat,
+    QTextCursor,
+)
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -54,6 +62,8 @@ class Bridge(QObject):
 
     status = Signal(str)
     transcript = Signal(str, str)
+    partial = Signal(str, str)
+    latency = Signal(float)
     suggestion = Signal(object)
     error = Signal(str)
     debug = Signal(object)
@@ -122,6 +132,8 @@ class ControlWindow(QMainWindow):
         events = PipelineEvents(
             status=self.bridge.status.emit,
             transcript=self.bridge.transcript.emit,
+            partial=self.bridge.partial.emit,
+            latency=self.bridge.latency.emit,
             suggestion=self.bridge.suggestion.emit,
             error=self.bridge.error.emit,
             debug=self.bridge.debug.emit,
@@ -133,6 +145,7 @@ class ControlWindow(QMainWindow):
         self.on_air: Optional[Suggestion] = None
         self._listening = False
         self._transcript_chars = 0
+        self._partial_chars = 0  # greyed unfinished words at the end of the transcript
 
         self.setWindowTitle("Vachan - Operator")
         self.resize(1280, 800)
@@ -406,6 +419,9 @@ class ControlWindow(QMainWindow):
         row.addWidget(self.status, 1)
         self.engine_label = _label("", "Muted")
         row.addWidget(self.engine_label)
+        self.delay_label = _label("", "Muted")
+        self.delay_label.setToolTip("Measured: end of the spoken phrase -> suggestion on the card")
+        row.addWidget(self.delay_label)
         self.btn_debug = QPushButton("Debug")
         self.btn_debug.setObjectName("Ghost")
         self.btn_debug.setCheckable(True)
@@ -432,6 +448,8 @@ class ControlWindow(QMainWindow):
         b = self.bridge
         b.status.connect(self._on_status)
         b.transcript.connect(self._on_transcript)
+        b.partial.connect(self._on_partial)
+        b.latency.connect(self._on_latency)
         b.suggestion.connect(self._on_suggestion)
         b.error.connect(self._show_error)
         b.debug.connect(self._on_debug)
@@ -644,11 +662,37 @@ class ControlWindow(QMainWindow):
 
     def _clear_transcript(self) -> None:
         self.transcript.clear()
-        self._transcript_chars = 0
+        self._transcript_chars = self._partial_chars = 0
 
-    def _on_transcript(self, text: str, language: str) -> None:
+    def _drop_partial(self) -> QTextCursor:
         cursor = self.transcript.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
+        if self._partial_chars:
+            cursor.movePosition(
+                QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.KeepAnchor, self._partial_chars
+            )
+            cursor.removeSelectedText()
+            self._partial_chars = 0
+        return cursor
+
+    def _on_partial(self, text: str, language: str) -> None:
+        cursor = self._drop_partial()
+        if text:
+            grey = QTextCharFormat()
+            grey.setForeground(QColor(theme.MUTED))
+            shown = ("" if self._transcript_chars == 0 else " ") + text
+            cursor.insertText(shown, grey)
+            self._partial_chars = len(shown)
+            self.transcript.setTextCursor(cursor)
+            self.transcript.ensureCursorVisible()
+
+    def _on_latency(self, seconds: float) -> None:
+        self.delay_label.setText(f"delay {seconds:.1f} s")
+        self.delay_label.setStyleSheet(f"color: {theme.GREEN if seconds <= 3.0 else theme.AMBER};")
+
+    def _on_transcript(self, text: str, language: str) -> None:
+        cursor = self._drop_partial()
+        cursor.setCharFormat(QTextCharFormat())
         if self._transcript_chars > 260 or self.transcript.document().isEmpty():
             if not self.transcript.document().isEmpty():
                 cursor.insertBlock()
@@ -660,8 +704,7 @@ class ControlWindow(QMainWindow):
         self.lang_label.setText({"hi": "हिंदी", "en": "English"}.get(language, language))
 
     def _on_suggestion(self, s: Suggestion) -> None:
-        cursor = self.transcript.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor = self._drop_partial()  # the chip must not be erased with the partial words
         chip = (
             f"&nbsp;<span style='background-color:{theme.ACCENT_DIM}; color:{theme.ACCENT}; "
             f"font-weight:600;'>&nbsp;{html.escape(s.reference.format_reference())}&nbsp;</span>&nbsp;"

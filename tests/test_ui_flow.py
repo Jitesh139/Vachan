@@ -145,3 +145,19 @@ def test_ten_repeated_runs(win, run):
     assert card(win) == "Psalms 91:2"
     win.approve()
     assert on_air(win) == "Psalms 91:2"
+
+
+def test_partial_words_replaced_by_final_and_chip_survives(win):
+    win._on_transcript("Good morning.", "en")
+    win._on_partial("Turn to Psalms", "en")
+    win._on_partial("Turn to Psalms 91 verse 2 he", "en")
+    handle(win, "Turn to Psalms 91 verse 2")  # suggestion chip arrives while a partial shows
+    win._on_transcript("Turn to Psalms 91 verse 2 he that dwelleth", "en")
+    text = win.transcript.toPlainText()
+    assert text.count("Turn to Psalms") == 1 and "Psalms 91:2" in text  # chip kept
+    assert text.endswith("he that dwelleth")
+
+
+def test_footer_shows_measured_delay(win):
+    win._on_latency(1.84)
+    assert win.delay_label.text() == "delay 1.8 s"
