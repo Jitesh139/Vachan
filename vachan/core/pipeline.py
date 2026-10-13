@@ -16,7 +16,7 @@ import threading
 import time
 import wave
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from typing import Callable, Optional
@@ -248,7 +248,7 @@ class PipelineWorker:
                 return f"duplicate follow-up ignored: {label}", None
         elif now - st.recent.get(ref.key, -1e9) < self.settings.duplicate_cooldown_sec:
             return f"duplicate ignored: {label}", None
-        if "chapter_only_default_verse_1" in result.low_confidence_reasons:
+        if ref.verse_start is None:
             if st.pending_chapter != ref.key:  # the verse number may still be coming
                 st.pending_chapter = ref.key
                 return f"waiting for a verse number: {label}", None
@@ -264,7 +264,17 @@ class PipelineWorker:
         return f"MATCH {label} {list(result.low_confidence_reasons)}", suggestion
 
     def build_suggestion(self, result: ParseResult) -> Optional[Suggestion]:
-        """Attach verse text in the primary (+ secondary) translation."""
+        """Attach verse text in the primary (+ secondary) translation.
+
+        A chapter-only result becomes an explicit verse-1 guess, flagged "verse_guessed"
+        so the card says so and auto-show never fires.
+        """
+        if result.reference.verse_start is None:
+            result = replace(
+                result,
+                reference=replace(result.reference, verse_start=1),
+                low_confidence_reasons=result.low_confidence_reasons + ("verse_guessed",),
+            )
         ref = result.reference
         s = self.settings
         primary = self.bible.get_passage(ref, ref.version or s.primary_version)

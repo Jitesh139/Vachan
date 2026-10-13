@@ -108,7 +108,7 @@ def test_english_turn_to_chapter_only(parser: ReferenceParser) -> None:
     assert res.is_valid
     assert res.reference.book_name == "Romans"
     assert res.reference.chapter == 8
-    assert res.reference.verse_start == 1
+    assert res.reference.verse_start is None  # chapter only: never defaulted to 1
 
 
 # ==========================================
@@ -579,7 +579,7 @@ def test_whisper_psalm_single_chapter(parser: ReferenceParser) -> None:
     assert res is not None
     assert res.reference.book_name == "Psalms"
     assert res.reference.chapter == 23
-    assert res.reference.verse_start == 1
+    assert res.reference.verse_start is None  # chapter only: never defaulted to 1
 
 
 def test_whisper_psalms_plural(parser: ReferenceParser) -> None:
@@ -595,7 +595,7 @@ def test_whisper_zabur_alias(parser: ReferenceParser) -> None:
     assert res is not None
     assert res.reference.book_name == "Psalms"
     assert res.reference.chapter == 23
-    assert res.reference.verse_start == 1
+    assert res.reference.verse_start is None  # chapter only: never defaulted to 1
 
 
 def test_whisper_zaboor_alternate(parser: ReferenceParser) -> None:
@@ -611,7 +611,7 @@ def test_whisper_bhajan_samhita_devanagari(parser: ReferenceParser) -> None:
     assert res is not None
     assert res.reference.book_name == "Psalms"
     assert res.reference.chapter == 23
-    assert res.reference.verse_start == 1
+    assert res.reference.verse_start is None  # chapter only: never defaulted to 1
 
 
 def test_whisper_first_corinthians_words(parser: ReferenceParser) -> None:

@@ -9,7 +9,8 @@ from vachan.core.settings import Settings
 
 REASON_TEXT = {
     "no_preacher_cue_words": "No cue words (turn to / chapter / अध्याय) - could be casual speech",
-    "chapter_only_default_verse_1": "Only a chapter was heard - verse 1 assumed",
+    "chapter_only_no_verse": "Only a chapter was heard",
+    "verse_guessed": "Verse number NOT heard - verse 1 is only a guess",
     "book_name_is_common_word": "Book name is also an everyday word",
     "invalid_chapter_or_verse_count": "Chapter/verse does not exist",
 }

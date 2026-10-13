@@ -27,6 +27,10 @@ FILLERS = CHAPTER_CUES | VERSE_CUES | {
     "of", "the", "in", "number", "ke", "ka", "ki", "mein", "me", "se",
     "के", "का", "की", "में", "मे", "को", ":",
 }  # fmt: skip
+# Whisper writes a spoken number as a homophone ("verse to", "pad do"); only trusted right
+# after a chapter/verse cue word, where nothing but a number makes sense
+CUED_HOMOPHONES = {"to": 2, "too": 2, "tu": 2, "do": 2, "for": 4, "fore": 4, "won": 1, "ate": 8}
+CONJUNCTIONS = {"and", "aur", "और"}  # "Psalms 91 and verse 2"
 RANGE_SEPS = {"-", "to", "through", "thru", "till", "until", "and", "se", "से", "और"}
 # Words that make it likely a preacher is citing scripture
 CUE_WORDS = CHAPTER_CUES | VERSE_CUES | {
@@ -221,14 +225,20 @@ class ReferenceParser:
     def _skip_fillers(self, tokens: list[str], i: int, limit: int) -> tuple[int, bool, bool]:
         chapter_cue = verse_cue = False
         for _ in range(4):
+            if i + 1 < limit and tokens[i] in CONJUNCTIONS and tokens[i + 1] in FILLERS:
+                i += 1
             if i < limit and tokens[i] in FILLERS:
                 chapter_cue |= tokens[i] in CHAPTER_CUES
                 verse_cue |= tokens[i] in VERSE_CUES
                 i += 1
         return i, chapter_cue, verse_cue
 
-    def _number(self, tokens: list[str], i: int, limit: int) -> Optional[tuple[int, int]]:
+    def _number(
+        self, tokens: list[str], i: int, limit: int, cued: bool = False
+    ) -> Optional[tuple[int, int]]:
         parsed = self.normalizer.parse_number(tokens[:limit], i)
+        if parsed is None and cued and i < limit and tokens[i] in CUED_HOMOPHONES:
+            return CUED_HOMOPHONES[tokens[i]], i + 1
         return parsed if parsed and parsed[1] <= limit else None
 
     def _scan_numbers(self, tokens: list[str], i: int, limit: int) -> Optional[_Numbers]:
@@ -238,12 +248,13 @@ class ReferenceParser:
         if not first:
             return None
         chapter, i = first
+        verse_cue = False
         if i < limit and tokens[i] in (":", "-"):
             j = i + 1
         else:
-            j, cue, _ = self._skip_fillers(tokens, i, limit)
+            j, cue, verse_cue = self._skip_fillers(tokens, i, limit)
             chapter_cue |= cue
-        second = self._number(tokens, j, limit)
+        second = self._number(tokens, j, limit, cued=verse_cue)
         if not second:
             return _Numbers(chapter, None, None, i, chapter_cue)
         verse, i = second
@@ -266,10 +277,11 @@ class ReferenceParser:
         raw = " ".join(tokens[hit.start : nums.end])
 
         if verse is None:
-            split = self._split_run_together(book.book_id, chapter)
-            if split:
-                chapter, verse = split
-                reasons.append(f"number_split: {nums.chapter} -> {chapter}:{verse}")
+            splits = self._split_run_together(book.book_id, chapter)
+            if splits:
+                chapter, verse = splits[0]
+                others = "".join(f" (or {c}:{v})" for c, v in splits[1:])  # "912": 9:12 or 91:2
+                reasons.append(f"number_split: {nums.chapter} -> {chapter}:{verse}{others}")
         has_cue = self._has_cue(tokens, hit.start, nums.end)
 
         if verse is None:
@@ -277,8 +289,7 @@ class ReferenceParser:
                 return None  # "John 3" in passing is not worth a suggestion
             if not self.validator.is_valid_chapter(book.book_id, chapter):
                 return self._invalid(raw)
-            verse = 1
-            reasons.append("chapter_only_default_verse_1")
+            reasons.append("chapter_only_no_verse")  # never default to verse 1 here
         elif not self.validator.is_valid_reference(book.book_id, chapter, verse, verse_end):
             return self._invalid(raw)
 
@@ -290,7 +301,7 @@ class ReferenceParser:
             if book.common_word:
                 score -= 0.10
                 reasons.append("book_name_is_common_word")
-        if "chapter_only_default_verse_1" not in reasons:
+        if verse is not None:
             score += 0.20
         if hit.fuzzy:
             score -= 0.25
@@ -308,16 +319,13 @@ class ReferenceParser:
         )
         return ParseResult(ref, raw, round(max(0.05, min(1.0, score)), 2), False, tuple(reasons))
 
-    def _split_run_together(self, book_id: str, number: int) -> Optional[tuple[int, int]]:
-        """Whisper often writes 'John 316' for 'John 3 16'."""
+    def _split_run_together(self, book_id: str, number: int) -> list[tuple[int, int]]:
+        """Whisper often writes 'John 316' for 'John 3 16'; every valid split, shortest chapter first."""
         digits = str(number)
         if len(digits) < 3 or self.validator.is_valid_chapter(book_id, number):
-            return None
-        for k in range(1, len(digits)):
-            chapter, verse = int(digits[:k]), int(digits[k:])
-            if digits[k] != "0" and self.validator.is_valid_reference(book_id, chapter, verse):
-                return chapter, verse
-        return None
+            return []
+        splits = [(int(digits[:k]), int(digits[k:])) for k in range(1, len(digits)) if digits[k] != "0"]
+        return [(c, v) for c, v in splits if self.validator.is_valid_reference(book_id, c, v)]
 
     def _has_cue(self, tokens: list[str], start: int, end: int) -> bool:
         return any(t in CUE_WORDS for t in tokens[max(0, start - 6) : end])
@@ -345,14 +353,14 @@ class ReferenceParser:
             if i in consumed:
                 continue
             pair = (tok, tokens[i + 1] if i + 1 < len(tokens) else "")
-            if pair in NEXT_PHRASES or pair in PREV_PHRASES:
+            if (pair in NEXT_PHRASES or pair in PREV_PHRASES) and ctx.verse_start is not None:
                 delta = 1 if pair in NEXT_PHRASES else -1
                 verse = (ctx.verse_end or ctx.verse_start) + 1 if delta > 0 else ctx.verse_start - 1
                 ref = self._ctx_ref(ctx, ctx.chapter, verse, None)
                 if ref:
                     out.append((i, ParseResult(ref, " ".join(pair), 0.9, True)))
             elif tok in VERSE_CUES:
-                nums = self._number(tokens, i + 1, len(tokens))
+                nums = self._number(tokens, i + 1, len(tokens), cued=True)
                 if nums and nums[1] - 1 not in consumed:
                     end = None
                     if nums[1] < len(tokens) and tokens[nums[1]] in RANGE_SEPS:
@@ -365,17 +373,21 @@ class ReferenceParser:
             elif tok in CHAPTER_CUES:
                 nums = self._scan_numbers(tokens, i, len(tokens))
                 if nums and not consumed.intersection(range(i, nums.end)):
-                    verse = nums.verse or 1
-                    ref = self._ctx_ref(ctx, nums.chapter, verse, nums.verse_end)
+                    ref = self._ctx_ref(ctx, nums.chapter, nums.verse, nums.verse_end)
                     if ref:
                         raw = " ".join(tokens[i : nums.end])
-                        out.append((i, ParseResult(ref, raw, 0.7, True, relative)))
+                        why = relative + (() if nums.verse else ("chapter_only_no_verse",))
+                        out.append((i, ParseResult(ref, raw, 0.7, True, why)))
                         consumed.update(range(i, nums.end))
         return out
 
     def _ctx_ref(
-        self, ctx: BibleReference, chapter: int, verse: int, verse_end: Optional[int]
+        self, ctx: BibleReference, chapter: int, verse: Optional[int], verse_end: Optional[int]
     ) -> Optional[BibleReference]:
-        if not self.validator.is_valid_reference(ctx.book_id, chapter, verse, verse_end):
+        if verse is None:
+            valid = self.validator.is_valid_chapter(ctx.book_id, chapter)
+        else:
+            valid = self.validator.is_valid_reference(ctx.book_id, chapter, verse, verse_end)
+        if not valid:
             return None
         return BibleReference(ctx.book_id, ctx.book_name, chapter, verse, verse_end, ctx.version)

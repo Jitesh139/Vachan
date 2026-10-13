@@ -48,7 +48,7 @@ POSITIVE = [
     ("Isaiah 40 verse 31", "Isaiah 40:31"),
     ("Matthew 28, 19 and 20", "Matthew 28:19-20"),
     ("Read from the book of Revelation chapter 21 verse 4.", "Revelation 21:4"),
-    ("Turn to Romans 8.", "Romans 8:1"),
+    ("Turn to Romans 8.", "Romans 8"),
     ("Turn to John chapter 3. Turn to John chapter 3 verse 16.", "John 3:16"),
     ("John 3:16 says God loved the world. Now Romans 5 8.", "Romans 5:8"),
     ("Galatians 5, 22 and 23", "Galatians 5:22-23"),
@@ -155,12 +155,13 @@ def test_fuzzy_match_is_flagged(parser):
 
 def test_chapter_only_is_flagged(parser):
     res = parser.parse("Turn to Romans 8.")
-    assert "chapter_only_default_verse_1" in res.low_confidence_reasons
+    assert "chapter_only_no_verse" in res.low_confidence_reasons
+    assert res.reference.verse_start is None
 
 
 @pytest.mark.parametrize(
     "text,expected",
-    [("Jn 3:16", "John 3:16"), ("1 Cor 13:4", "1 Corinthians 13:4"), ("Ps 23", "Psalms 23:1")],
+    [("Jn 3:16", "John 3:16"), ("1 Cor 13:4", "1 Corinthians 13:4"), ("Ps 23", "Psalms 23")],
 )
 def test_abbreviations_only_when_typed(parser, text, expected):
     assert fmt(parser.parse(text, typed=True)) == expected

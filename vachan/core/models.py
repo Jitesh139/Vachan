@@ -13,12 +13,14 @@ class BibleReference:
     book_id: str  # USFM code, e.g. "JHN"
     book_name: str  # English name, e.g. "John"
     chapter: int
-    verse_start: int
+    verse_start: Optional[int]  # None = only a chapter was spoken ("Psalms 91")
     verse_end: Optional[int] = None
     version: Optional[str] = None  # translation spoken by the preacher, e.g. "ESV"
 
     def format_reference(self) -> str:
-        """'John 3:16' or 'John 3:16-18'."""
+        """'John 3:16', 'John 3:16-18', or 'John 3' for a chapter-only reference."""
+        if self.verse_start is None:
+            return f"{self.book_name} {self.chapter}"
         verses = str(self.verse_start)
         if self.verse_end and self.verse_end != self.verse_start:
             verses += f"-{self.verse_end}"
@@ -26,7 +28,7 @@ class BibleReference:
 
     @property
     def key(self) -> tuple:
-        """Identity used for duplicate suppression (ignores version)."""
+        """Identity used for duplicate suppression (ignores version; includes the verse)."""
         return (self.book_id, self.chapter, self.verse_start, self.verse_end)
 
 
