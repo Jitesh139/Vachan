@@ -109,5 +109,5 @@ class OpenVinoTranscriber:
             max_new_tokens=MAX_NEW_TOKENS,
             **kwargs,
         )
-        detected = (result.languages[0] if result.languages else "").strip("<|>") or (language or "en")
+        detected = str(getattr(result, "language", "") or "").strip("<|>") or (language or "en")
         return str(result).strip(), detected
