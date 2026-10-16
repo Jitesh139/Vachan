@@ -41,6 +41,26 @@ PARTIAL_BUDGET_SEC = 1.0  # skip a partial expected to take longer (delays the e
 FOLLOW_UP_GUARD_SEC = 5.0  # one "next verse" phrase seen by a partial and again by the final
 # Whole-transcript hallucinations Whisper produces on noise/music
 HALLUCINATIONS = {"thank you", "thanks for watching", "धन्यवाद", "subscribe", "you"}
+_WORD = re.compile(r"[\wऀ-ॿ]+")
+
+
+def cut_repetition(text: str) -> str:
+    """Cut a Whisper repetition loop ("पहला, पहला, पहला, पहला…") where it starts.
+
+    A word 4x in a row, or a 2-5 word group 3x in a row; the loop is dropped entirely so
+    echoed cue words cannot join a book name said earlier.
+    """
+    found = list(_WORD.finditer(text))
+    words = [m.group().lower() for m in found]
+    for i in range(len(words)):
+        for n in range(1, 6):
+            reps = 4 if n == 1 else 3
+            group = words[i : i + n]
+            if i + n * reps <= len(words) and all(
+                words[i + k * n : i + (k + 1) * n] == group for k in range(reps)
+            ):
+                return text[: found[i].start()]
+    return text
 
 
 def _noop(*_args) -> None:
@@ -283,7 +303,7 @@ class PipelineWorker:
         seg.language = t.language
         dur = len(audio) / SR
         self._rtf = 0.7 * self._rtf + 0.3 * (t.seconds / max(dur, 0.5))
-        text = t.text if t.text.lower().strip(" .!") not in HALLUCINATIONS else ""
+        text = cut_repetition(t.text) if t.text.lower().strip(" .!") not in HALLUCINATIONS else ""
         info = dict(
             timestamp=datetime.now().strftime("%H:%M:%S.%f")[:-3],
             rms=float(np.sqrt(np.mean(audio * audio))) if len(audio) else 0.0,
