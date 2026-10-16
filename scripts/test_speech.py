@@ -49,6 +49,7 @@ SAMPLES = [
     ("en", "Please turn with me to Psalms 91", "Psalms 91:1 (GUESS)", None),  # chapter only
 ]
 JOHN_2_1 = BibleReference("JHN", "John", 2, 1)
+NOTHING = "nothing"  # expected: no suggestion at all
 # Natural Hindi preaching (tests/test_parser_spoken_hindi.py SEED), spoken by a Hindi voice
 HINDI_SAMPLES = [
     ("hi", "यूहन्ना रचित सुसमाचार दूसरा अध्याय पहला वचन", "John 2:1", None),
@@ -69,6 +70,13 @@ HINDI_SAMPLES = [
     ("hi", "अगला वचन", "John 2:2", JOHN_2_1),
     ("hi", "पिछला पद", "John 3:15", JOHN_3_16),
     ("hi", "अब सातवें वचन में", "John 2:7", JOHN_2_1),
+    # must produce nothing, even with a verse on screen
+    ("hi", "परमेश्वर का वचन हमें सिखाता है", NOTHING, JOHN_2_1),
+    ("hi", "पहला वचन परमेश्वर ने दिया", NOTHING, JOHN_2_1),
+    ("hi", "यह पहला अध्याय है हमारे जीवन का", NOTHING, JOHN_2_1),
+    ("hi", "दो तीन बातें याद रखिए", NOTHING, JOHN_2_1),
+    ("hi", "मैं तीन बजे आया", NOTHING, JOHN_2_1),
+    ("hi", "यूहन्ना ने बपतिस्मा दिया", NOTHING, JOHN_2_1),
 ]
 SAMPLE_DIR = APP_DIR / "tmp" / "speech_samples"
 
@@ -186,7 +194,7 @@ def report(line: str, suggestion, expected: str | None) -> bool:
     """Print transcript -> reference -> verse and return pass/fail."""
     if suggestion is None:
         print(f"  parser: {line}")
-        ok = expected is None
+        ok = expected in (None, NOTHING)
     else:
         ref = label(suggestion)
         print(f"  reference: {ref}  (confidence {suggestion.result.confidence:.2f})")
