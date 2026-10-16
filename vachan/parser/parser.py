@@ -68,7 +68,7 @@ NUMBER_PREFIXES = {
 }
 TYPED_ONLY_EXTRAS = {"PSA": ["bhajan"]}  # spoken "bhajan 23" is usually a hymn number
 SPEECH_EXTRAS = {"MAT": ["mathew", "mathi"], "REV": ["revelations"], "JHN": ["yahunna", "जौन"],
-                 "PSA": ["psalm", "zabur", "zaboor"]}  # fmt: skip
+                 "GAL": ["गलाथियों"], "PSA": ["psalm", "zabur", "zaboor"]}  # fmt: skip
 # Gospel John vs the three letters ("यूहन्ना की पहली पत्री")
 EPISTLE_OF = {"JHN": "1JN"}
 ORDINAL_SUFFIX = re.compile(r"v[ei]?n?$")  # phonetic key of -वाँ/-वें/-वीं, -va/-ve/-van

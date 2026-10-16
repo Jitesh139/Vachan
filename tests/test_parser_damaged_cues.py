@@ -175,3 +175,8 @@ def test_ordinary_words_are_not_cues(parser, word):
     from vachan.parser.parser import CHAPTER_CUES, VERSE_CUES
 
     assert parser._canonical(word) not in CHAPTER_CUES | VERSE_CUES
+
+
+def test_real_mic_galatians_spelling(parser):
+    res = parser.parse("गलाथियों की पत्री दूसरा अध्याय, पहला वचन.")  # live mic, 11:22
+    assert fmt(res) == "Galatians 2:1" and res.confidence >= 0.9
