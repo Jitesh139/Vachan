@@ -149,6 +149,13 @@ def test_chapter_only_when_no_second_number(parser, text):
         "ध्यान दीजिए, पहला और दूसरा",
         "I sat down with John yesterday and we talked for 2 hours",
         "Mark 2 people as present",
+        # Hindi Bible prose that the looser rules first matched (scan of all 31,104 HIN_IRV verses)
+        "यहोयाकीम के राज्य के चौथे वर्ष के पांचवें महीने में",
+        "गिनती में वे बाईस हजार छः सौ थे",
+        "पहलौठा योहानान दूसरा यहोयाकीम तीसरा सिदकिय्याह",
+        "तब शमूएल शाऊल के पास गया और शाऊल ने उससे कहा",
+        "वहाँ राजा का एक कर्मचारी था जिसका पुत्र बीमार था",
+        "आइए हम सब मिलकर दूसरा भजन गाएं",
     ],
 )
 def test_no_false_positive(parser, text):
@@ -159,7 +166,8 @@ def test_no_false_positive(parser, text):
 def test_damaged_chapter_cue_is_a_cue(parser, word):
     from vachan.parser.parser import CHAPTER_CUES
 
-    assert parser._canonical(word) in CHAPTER_CUES
+    (token,) = parser._tokens(word)
+    assert token in CHAPTER_CUES
 
 
 @pytest.mark.parametrize("word", ["ध्यान", "अध्यापक", "दया", "आया", "बचपन", "पढ़"])

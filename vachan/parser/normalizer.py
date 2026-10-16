@@ -52,7 +52,8 @@ DEV = "\u0900-\u097f"
 _B, _E = f"(?<![{DEV}])", f"(?![{DEV}])"  # Devanagari word edges (\b fails on matras)
 # Whisper spellings -> canonical token
 SPELLING_FIXES = [
-    (_B + "(?:अ[दध]्?या[इईये]?य?|अद्ध्याय)" + _E, "अध्याय"),
+    # also with the first letter lost on a laptop mic ("ध्याय", "द्याय") and "अध्यय"
+    (_B + "(?:अ[दध]्?या[इईये]?य?|अद्ध्याय|[दध]्या[इईये]?य|अ[दध]्यय)" + _E, "अध्याय"),
     (_B + "च[ैे]?प्टर्?स?" + _E, "chapter"),
     (_B + "(?:वर्सेस|वर्सेज|वर्सिस|वर्स्ट|वर्स|वरस)" + _E, "verse"),
     (_B + "नेक्स्ट" + _E, "next"),

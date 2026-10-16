@@ -18,10 +18,10 @@ from rapidfuzz import fuzz, process
 
 from vachan.core.models import BibleReference, ParseResult
 from vachan.core.paths import DATA_DIR
-from vachan.parser.normalizer import NumberNormalizer, phonetic
+from vachan.parser.normalizer import MISHEARD_NUMBERS, NumberNormalizer, fold, phonetic
 from vachan.parser.validator import CanonValidator
 
-CHAPTER_CUES = {"chapter", "chapters", "adhyay", "adhyaya", "adyay", "अध्याय"}
+CHAPTER_CUES = {"chapter", "chapters", "ch", "adhyay", "adhyaya", "adyay", "अध्याय"}
 VERSE_CUES = {"verse", "verses", "pad", "aayat", "ayat", "vachan", "bachan", "पद", "आयत", "वचन",
               "बचन", "पैड"}  # fmt: skip
 GLUED_CUE = re.compile("(.+?)(पद|वचन|बचन)$")  # Whisper: "चौथापद", "नवापद", "28 वापद"
@@ -103,6 +103,7 @@ class _Numbers:
     verse_end: Optional[int]
     end: int  # token index after the numbers
     chapter_cue: bool
+    reasons: tuple[str, ...] = ()
 
 
 class ReferenceParser:
@@ -128,6 +129,8 @@ class ReferenceParser:
         self._phon_aliases: dict[tuple[str, ...], Optional[_Alias]] = {}
         for k, a in self._aliases.items():
             pk = tuple(phonetic(t) for t in k)
+            if any(len(p) < 3 for p in pk):  # "राजा" -> "ry" would also catch "राज्य"
+                continue
             old = self._phon_aliases.get(pk, a)
             self._phon_aliases[pk] = a if old and old.book_id == a.book_id else None
 
@@ -137,10 +140,14 @@ class ReferenceParser:
         words = (CHAPTER_CUES | VERSE_CUES | FILLERS | CUE_WORDS | LINK_WORDS | NEXT_WORDS
                  | PREV_WORDS | CONJUNCTIONS | {"तक", "taq", "tak"})  # fmt: skip
         self._vocab = words
+        cues = sorted(CHAPTER_CUES | VERSE_CUES)
+        self._cue_keys = [(phonetic(w), w) for w in cues if len(phonetic(w)) >= 3]
         canon: dict[str, Optional[str]] = {}
         meaning: dict[str, object] = {}
         entries = [(w, w) for w in sorted(words)]
-        entries += [(w, self.normalizer.hindi[w]) for w in sorted(self.normalizer.hindi)]
+        misheard = {fold(w) for w in MISHEARD_NUMBERS}
+        numbers = sorted(w for w in self.normalizer.hindi if w not in misheard)
+        entries += [(w, self.normalizer.hindi[w]) for w in numbers]
         for word, sense in entries:
             key = phonetic(word)
             if key not in canon:
@@ -148,6 +155,8 @@ class ReferenceParser:
             elif isinstance(sense, int) or isinstance(meaning[key], int):
                 if meaning[key] != sense:  # "sat" 7 vs "saath" 60 must not merge
                     canon[key] = None
+        # misheard spellings only as ordinal stems ("सोलवा"): "शाऊल" (Saul) must not be 16
+        self._stem_canon = {**{phonetic(w): w for w in sorted(misheard)}, **canon}
         return canon
 
     def _canonical(self, token: str) -> str:
@@ -160,12 +169,16 @@ class ReferenceParser:
         ):
             return token
         key = phonetic(token)
+        if len(key) < 3:  # "e", "ki": too little left to tell words apart
+            return token
         hit = self._canon.get(key)
         if hit is None and key not in self._canon and RAW_ORDINAL.search(token):
             for stem in (key[:-1] if key.endswith("n") else "", ORDINAL_SUFFIX.sub("", key)):
-                found = self._canon.get(stem) if stem and stem != key else None
+                found = self._stem_canon.get(stem) if stem and stem != key else None
                 if found in self.normalizer.hindi:
                     return found
+        if hit is None and key not in self._canon:  # cue with its first letter lost: "dhyay"
+            hit = next((w for k, w in self._cue_keys if len(k) >= 4 and key == k[1:]), None)
         return hit or token
 
     def _tokens(self, text: str) -> list[str]:
@@ -289,6 +302,8 @@ class ReferenceParser:
             alias = self._aliases.get(words)
             if alias and (typed or not alias.typed_only):
                 return _BookHit(i, i + n, alias)
+            if any(w in self._vocab for w in words):  # "आइए" must never sound like a book
+                continue
             alias = self._phon_aliases.get(tuple(map(phonetic, words)))
             if alias and not alias.typed_only:  # same sound, other spelling: "romens", "mathi"
                 return _BookHit(i, i + n, alias, f"{' '.join(words)}->{alias.name} (spelling)")
@@ -410,17 +425,28 @@ class ReferenceParser:
             j, cue, verse_cue = self._skip_fillers(tokens, i, limit)
             chapter_cue |= cue
         second = self._number(tokens, j, limit, cued=verse_cue)
-        if not second:
-            return _Numbers(chapter, None, None, i, chapter_cue)
+        reasons: tuple[str, ...] = ()
+        if not second:  # "पहला ध्याय, आइए पढ़ें दूसरा वचन": a verse is never dropped for a few words
+            k = next((k for k in range(j, min(limit, j + 4)) if self._number(tokens, k, limit)), None)
+            after = self._number(tokens, k, limit) if k is not None else None
+            # a cue must confirm it: "राज्य के चौथे वर्ष के पांच", "बाईस हजार छः" are not references
+            if after is None or not (chapter_cue or (after[1] < limit and tokens[after[1]] in VERSE_CUES)):
+                return _Numbers(chapter, None, None, i, chapter_cue)
+            second, reasons = after, ("words_between_chapter_and_verse",)
         verse, i = second
         verse_end = None
         if i < limit and tokens[i] in RANGE_SEPS:
             third = self._number(tokens, i + 1, limit)
             if third and third[0] > verse:
                 verse_end, i = third
-        while i < limit and tokens[i] in VERSE_CUES | {"तक"}:
+        if verse_cue and verse_end is None and i < limit and tokens[i] in CHAPTER_CUES:
+            chapter, verse, chapter_cue = verse, chapter, True  # "दूसरा वचन पहला अध्याय"
+        cued = chapter_cue or verse_cue or (i < limit and tokens[i] in VERSE_CUES)
+        if not cued and not tokens[i - 1].isdigit():  # "यूहन्ना रचित सुसमाचार पहला दूसरा"
+            reasons += ("no_chapter_verse_words",)
+        while i < limit and tokens[i] in VERSE_CUES | CHAPTER_CUES | {"तक"}:
             i += 1
-        return _Numbers(chapter, verse, verse_end, i, chapter_cue)
+        return _Numbers(chapter, verse, verse_end, i, chapter_cue, reasons)
 
     # ------------------------------------------------------------------ results
     def _book_result(
@@ -465,6 +491,9 @@ class ReferenceParser:
         if any(r.startswith("number_split") for r in reasons):
             score -= 0.10
         if "book_number_not_spoken" in reasons:
+            score -= 0.15
+        if nums.reasons:  # verse kept, but the operator should look
+            reasons += nums.reasons
             score -= 0.15
 
         ref = BibleReference(
