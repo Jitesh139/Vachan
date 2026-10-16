@@ -763,8 +763,10 @@ class ControlWindow(QMainWindow):
         cursor.insertHtml(chip)
         self.transcript.ensureCursorVisible()
         air = self.on_air
-        if s.action == "upgrade" and air and air.is_guess and air.reference.key[:2] == s.reference.key[:2]:
-            # the operator already put the guessed verse on air; the spoken verse replaces it
+        same_chapter = air and air.is_guess and air.reference.key[:2] == s.reference.key[:2]
+        trusted = s.result.confidence >= self.settings.auto_show_threshold and not s.warnings
+        if s.action == "upgrade" and same_chapter and trusted:
+            # the operator already put the guessed verse on air; a clean spoken verse replaces it
             self.pending = s
             self.approve()
             self.status.setText(f"Upgraded on air: {air.reference.format_reference()} -> "
