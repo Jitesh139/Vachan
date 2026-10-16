@@ -58,7 +58,18 @@ faster-whisper or sounddevice; adapters implement the ports in `vachan/core/port
   of silence) (Urdu probability counted as Hindi) with
   hysteresis. Unrestricted detection turned Hindi speech into romanized gibberish (see AUDIT.md).
 - **Prompt without numbers.** Whisper sometimes echoes `initial_prompt`; a prompt containing
-  "Romans 8:28" produced that reference from unrelated speech.
+  "Romans 8:28" produced that reference from unrelated speech. The prompt is a vocabulary list
+  only, and short: Whisper keeps ~223 prompt tokens and one Hindi word costs 9-17 of them.
+- **One spelling key for both scripts** (`normalizer.phonetic`): "पहला"/"pehla"/"pahla" -> "phl",
+  "सुसमाचार"/"susmachar" -> "susmchr". Variants snap onto the known cue, number and ordinal words;
+  book names matched only through the key are flagged like fuzzy matches. Keys shared by two
+  numbers or two books (sat/saath, योना/जॉन) are dropped, never guessed.
+- **Descriptors pick the book.** "यूहन्ना रचित सुसमाचार" = John, "यूहन्ना की पहली पत्री" = 1 John,
+  "कुरिन्थियों की दूसरी पत्री" = 2 Corinthians; a letter without its number is 1 X, flagged.
+- **"वचन" also means "word".** A verse-only follow-up with it ("अब सातवें वचन में") needs an anchor
+  word (अब, में, देखिए...), so "पहला वचन परमेश्वर ने दिया" stays nothing.
+- **Missed verses are data.** F7 stores the last 30 s of transcript with the right reference in
+  `data/corpus/missed.jsonl` (local); `scripts/eval_corpus.py` replays it as a regression set.
 - **GPU verified by a warm-up inference** because missing cuBLAS/cuDNN DLLs only fail at the first
   transcription, not at model load. CUDA errors at runtime (e.g. out of memory) switch to CPU.
 - **Abbreviations only for typed search.** "he", "am", "is" are book abbreviations but also common
