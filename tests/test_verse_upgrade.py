@@ -244,3 +244,23 @@ def test_every_decision_is_logged(bible):  # noqa: F811
     assert "action=upgrade ref=Psalms 91:2 verse_source=spoken" in got["lines"][1]
     line, _ = worker._handle_text("Psalms 91 verse 2")
     assert "action=duplicate ref=Psalms 91:2" in line
+
+
+# Live mic case split over two windows: chapter (damaged cue) first, the verse later
+MIC_CHAPTER = "आप सभी को जै मसी की, यूहन्ना, रचित सुसमाचार, पहला, ध्याय,"
+
+
+def test_damaged_cue_verse_in_next_window_before_guess(bible):  # noqa: F811
+    _, got = run(bible, [MIC_CHAPTER, 1.0, "दूसरा, वचन."])
+    assert refs(got) == ["John 1:2"]
+
+
+def test_damaged_cue_verse_after_guess_upgrades_same_card(bible):  # noqa: F811
+    _, got = run(bible, [MIC_CHAPTER, 3.5, "दूसरा, वचन."])
+    assert refs(got) == ["John 1:1", "John 1:2"]
+    assert [s.action for s in got["suggestions"]] == ["guess", "upgrade"]
+
+
+def test_whole_phrase_in_one_window_is_never_a_guess(bible):  # noqa: F811
+    _, got = run(bible, [MIC_CHAPTER + " दूसरा, वचन.", 3.5])
+    assert refs(got) == ["John 1:2"] and not got["suggestions"][0].is_guess
