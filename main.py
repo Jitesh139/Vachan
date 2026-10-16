@@ -62,6 +62,22 @@ def ensure_bible_db(app: QApplication) -> str:
     return ""
 
 
+def machine_warning() -> str:
+    """Battery or low free RAM makes transcription slow; warn before the service starts."""
+    import psutil
+
+    problems = []
+    battery = psutil.sensors_battery()
+    if battery and not battery.power_plugged:
+        problems.append("the laptop is on battery (plug it in: Windows slows the CPU/GPU)")
+    free_gb = psutil.virtual_memory().available / 1e9
+    if free_gb < 2.0:
+        problems.append(f"only {free_gb:.1f} GB RAM is free (close Chrome and other apps)")
+    if problems:
+        logging.getLogger("vachan").warning("Startup check: %s", "; ".join(problems))
+    return f"Speech may be slow: {'; '.join(problems)}." if problems else ""
+
+
 def main() -> int:
     """Wire adapters and windows together and run the Qt event loop."""
     setup_logging()
@@ -92,6 +108,7 @@ def main() -> int:
         QMessageBox.critical(None, "Vachan", f"Reference data in data/ could not be loaded:\n{e}")
         return 1
 
+    error = error or machine_warning()
     output = VerseDisplayWindow(settings.theme, settings.display_mode)
     window = ControlWindow(settings, ProfileTranscriber(settings), parser, bible, output, error)
     window.show()
