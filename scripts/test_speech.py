@@ -12,6 +12,7 @@ Options: --device cpu|cuda|auto, --model NAME (overrides the GPU/CPU default), -
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
 import time
 import wave
@@ -70,6 +71,17 @@ HINDI_SAMPLES = [
     ("hi", "अगला वचन", "John 2:2", JOHN_2_1),
     ("hi", "पिछला पद", "John 3:15", JOHN_3_16),
     ("hi", "अब सातवें वचन में", "John 2:7", JOHN_2_1),
+    # the live mic phrase (2026-10-16) and variations
+    (
+        "hi",
+        "आप सभी को जय मसीह की, आज हम पढ़ने जा रहे हैं यूहन्ना रचित सुसमाचार, पहला अध्याय, दूसरा वचन",
+        "John 1:2",
+        None,
+    ),  # fmt: skip
+    ("hi", "yahunna rachit susamachar, pehla adhyay, dusra vachan", "John 1:2", None),
+    ("hi", "यूहन्ना रचित सुसमाचार दूसरा वचन पहला अध्याय", "John 1:2", None),
+    ("hi", "गलतियों की पत्री दूसरा अध्याय पहला वचन", "Galatians 2:1", None),
+    ("hi", "यूहन्ना रचित सुसमाचार पहला अध्याय, आइए पढ़ें दूसरा वचन", "John 1:2", None),
     # must produce nothing, even with a verse on screen
     ("hi", "परमेश्वर का वचन हमें सिखाता है", NOTHING, JOHN_2_1),
     ("hi", "पहला वचन परमेश्वर ने दिया", NOTHING, JOHN_2_1),
@@ -90,7 +102,8 @@ def synthesize(voice: str, text: str, index: int) -> Path:
     'a | b' speaks a, pauses 1.5 s, then speaks b (a reference split by a pause).
     """
     voice = VOICES.get(voice, voice)
-    path = SAMPLE_DIR / f"sample_{index}_{voice}.wav"  # index may be "h3" (hindi set)
+    key = hashlib.md5(text.encode()).hexdigest()[:8]  # cache by text: lists get edited
+    path = SAMPLE_DIR / f"sample_{index}_{voice}_{key}.wav"
     if "|" in text:
         if not path.exists():
             texts = [t.strip() for t in text.split("|")]
