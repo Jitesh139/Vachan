@@ -13,10 +13,17 @@ log = logging.getLogger(__name__)
 
 # Vocabulary only - never put chapter/verse numbers here: Whisper sometimes echoes the
 # prompt, and a prompt containing "Romans 8:28" produced that reference out of thin air.
+# Whisper keeps only ~223 prompt tokens and a Hindi word costs 9-17, so this is a short
+# list of the words it misspelled most in tests; the parser knows all 66 books anyway.
 DEFAULT_PROMPT = (
-    "Sermon with Bible readings. यूहन्ना, रोमियों, मत्ती, भजन संहिता, उत्पत्ति, "
-    "अध्याय, पद. John, Romans, Matthew, Psalms, Genesis, chapter, verse."
+    "यूहन्ना, मत्ती, लूका, रोमियों, कुरिन्थियों, भजन संहिता, रचित सुसमाचार, पत्री, "
+    "अध्याय, वचन, पद, पहला, दूसरा, तीसरा, चौथा. chapter, verse."
 )
+# Earlier defaults saved in users' settings.json; replaced on load
+OLD_DEFAULT_PROMPTS = {
+    "Sermon with Bible readings. यूहन्ना, रोमियों, मत्ती, भजन संहिता, उत्पत्ति, "
+    "अध्याय, पद. John, Romans, Matthew, Psalms, Genesis, chapter, verse.",
+}
 
 
 @dataclass
@@ -62,7 +69,7 @@ class Settings:
                 value, default = data.get(f.name), getattr(defaults, f.name)
                 if isinstance(default, float) and type(value) in (int, float):
                     kwargs[f.name] = float(value)
-                elif type(value) is type(default):
+                elif type(value) is type(default) and value not in OLD_DEFAULT_PROMPTS:
                     kwargs[f.name] = value
             return cls(**kwargs)
         except (OSError, ValueError, TypeError) as e:
