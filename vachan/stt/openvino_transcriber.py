@@ -108,10 +108,11 @@ class OpenVinoTranscriber:
 
     def _generate(self, audio: np.ndarray, language: Optional[str]) -> tuple[str, str]:
         kwargs = {"language": f"<|{language}|>"} if language else {}
+        if self.settings.initial_prompt:  # OpenVINO rejects initial_prompt=None
+            kwargs["initial_prompt"] = self.settings.initial_prompt
         result = self._pipe.generate(
             audio.astype(np.float32, copy=False).tolist(),
             task="transcribe",
-            initial_prompt=self.settings.initial_prompt or None,
             max_new_tokens=MAX_NEW_TOKENS,
             **kwargs,
         )

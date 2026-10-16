@@ -49,3 +49,18 @@ def test_latin_text_is_english(reported):
 def test_mixed_line_follows_the_majority():
     t = transcriber("आज हम Psalms 91 verse 2 पढ़ेंगे और देखेंगे", "<|en|>")
     assert t.transcribe(np.zeros(16000, np.float32)).language == "hi"
+
+
+def test_empty_prompt_is_not_passed_as_none():
+    # OpenVINO raises "Property initial_prompt can't be None" (measured 2026-10-16)
+    seen = {}
+
+    class Pipe(FakePipe):
+        def generate(self, *args, **kwargs):
+            seen.update(kwargs)
+            return self.result
+
+    t = OpenVinoTranscriber(Settings(initial_prompt=""), "OpenVINO/whisper-small-int8-ov", "GPU")
+    t._pipe, t.device = Pipe("hello", "<|en|>"), "openvino-gpu"
+    t.transcribe(np.zeros(16000, np.float32))
+    assert "initial_prompt" not in seen
