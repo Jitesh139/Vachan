@@ -30,7 +30,7 @@ set "VPY=venv\Scripts\python.exe"
 
 rem ---- 3. Dependencies (re-installed only when requirements change) ----------
 set "STAMP=venv\installed.txt"
-copy /b requirements.txt + requirements-gpu.txt "%TEMP%\vachan_req.txt" >nul
+copy /b requirements.txt + requirements-gpu.txt + requirements-openvino.txt "%TEMP%\vachan_req.txt" >nul
 fc /b "%TEMP%\vachan_req.txt" "%STAMP%" >nul 2>&1
 if errorlevel 1 (
     echo [3/5] Installing dependencies - first run downloads about 300 MB...
@@ -39,6 +39,10 @@ if errorlevel 1 (
     where nvidia-smi >nul 2>&1 && (
         echo       NVIDIA driver found - installing CUDA libraries, about 1 GB...
         "%VPY%" -m pip install -r requirements-gpu.txt || echo [WARN] CUDA libraries failed - CPU will be used.
+    )
+    where nvidia-smi >nul 2>&1 || (
+        echo       No NVIDIA GPU - installing OpenVINO for Intel graphics, about 270 MB...
+        "%VPY%" -m pip install -r requirements-openvino.txt || echo [WARN] OpenVINO failed - CPU will be used.
     )
     copy /y "%TEMP%\vachan_req.txt" "%STAMP%" >nul
 ) else (
