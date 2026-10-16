@@ -67,7 +67,7 @@ NUMBER_PREFIXES = {
     3: ["3", "third", "teesra", "tisra", "teesri", "तीसरा", "तीसरी", "तीसरे", "तृतीय"],
 }
 TYPED_ONLY_EXTRAS = {"PSA": ["bhajan"]}  # spoken "bhajan 23" is usually a hymn number
-SPEECH_EXTRAS = {"MAT": ["mathew", "mathi"], "REV": ["revelations"], "JHN": ["yahunna"],
+SPEECH_EXTRAS = {"MAT": ["mathew", "mathi"], "REV": ["revelations"], "JHN": ["yahunna", "जौन"],
                  "PSA": ["psalm", "zabur", "zaboor"]}  # fmt: skip
 # Gospel John vs the three letters ("यूहन्ना की पहली पत्री")
 EPISTLE_OF = {"JHN": "1JN"}
