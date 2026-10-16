@@ -79,6 +79,11 @@ def fmt(res):
         ("Bhajan Sanhita 91 pad do", "Psalms 91:2"),
         ("Bhajan Sanhita 91 adhyay 2 pad", "Psalms 91:2"),
         ("zabur 91 pad 2", "Psalms 91:2"),
+        # spellings seen in real Whisper Hindi output
+        ("सामस 91 वरस 2", "Psalms 91:2"),
+        ("भजन संहिता 91 वर्स्ट 2", "Psalms 91:2"),
+        ("Psalms 91 पद डो", "Psalms 91:2"),
+        ("भजन संहिता 91 पद टू", "Psalms 91:2"),
     ],
 )
 def test_psalms_91_verse_2_forms(parser, text, expected):

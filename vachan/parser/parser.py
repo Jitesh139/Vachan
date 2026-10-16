@@ -29,7 +29,8 @@ FILLERS = CHAPTER_CUES | VERSE_CUES | {
 }  # fmt: skip
 # Whisper writes a spoken number as a homophone ("verse to", "pad do"); only trusted right
 # after a chapter/verse cue word, where nothing but a number makes sense
-CUED_HOMOPHONES = {"to": 2, "too": 2, "tu": 2, "do": 2, "for": 4, "fore": 4, "won": 1, "ate": 8}
+CUED_HOMOPHONES = {"to": 2, "too": 2, "tu": 2, "do": 2, "for": 4, "fore": 4, "won": 1, "ate": 8,
+                   "डो": 2, "टू": 2}  # fmt: skip
 CONJUNCTIONS = {"and", "aur", "और"}  # "Psalms 91 and verse 2"
 RANGE_SEPS = {"-", "to", "through", "thru", "till", "until", "and", "se", "से", "और"}
 # Words that make it likely a preacher is citing scripture
