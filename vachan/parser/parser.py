@@ -46,7 +46,8 @@ PREV_PHRASES = {("previous", "verse"), ("pichla", "pad"), ("pichhla", "pad"),
                 ("previous", "पद"), ("previous", "आयत"), ("previous", "वचन")}  # fmt: skip
 # Book names that are also everyday words / names - need a cue word to be trusted
 COMMON_WORD_BOOKS = {"mark", "job", "acts", "numbers", "james", "ruth", "jude", "amos",
-                     "john", "song", "जॉब", "मार्क", "जॉन", "नंबर्स", "जेम्स"}  # fmt: skip
+                     "john", "song", "जॉब", "मार्क", "जॉन", "नंबर्स", "जेम्स",
+                     "सांस"}  # fmt: skip
 NUMBER_PREFIXES = {
     1: ["1", "first", "pehla", "pahla", "pehli", "पहला", "पहली", "पहले", "प्रथम"],
     2: ["2", "second", "doosra", "dusra", "doosri", "दूसरा", "दूसरी", "दूसरे", "द्वितीय"],

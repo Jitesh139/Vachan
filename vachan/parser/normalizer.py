@@ -34,7 +34,7 @@ HINDI_ORDINALS = {
     "छठा": 6, "छठी": 6, "छठे": 6,
 }  # fmt: skip
 # Observed Whisper mishearings of Hindi numbers (only read inside book/chapter/verse structure)
-MISHEARD_NUMBERS = {"सुलह": 16, "सोला": 16, "sola": 16, "आत": 8, "अठाईस": 28, "अट्ठाइस": 28}
+MISHEARD_NUMBERS = {"सुलह": 16, "सोला": 16, "sola": 16, "आत": 8, "अठाईस": 28, "अट्ठाइस": 28, "अठ्थाईस": 28}
 # Romanized Hindi number words that are also everyday English/Hinglish words
 AMBIGUOUS_NUMBER_WORDS = {"do", "no", "to", "so"}
 

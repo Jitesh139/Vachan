@@ -84,6 +84,8 @@ def fmt(res):
         ("भजन संहिता 91 वर्स्ट 2", "Psalms 91:2"),
         ("Psalms 91 पद डो", "Psalms 91:2"),
         ("भजन संहिता 91 पद टू", "Psalms 91:2"),
+        ("आज हम सांस 91, verse 2 पढ़ेंगे.", "Psalms 91:2"),  # large-v3-turbo on the iGPU
+        ("रोमियों, आठ, अध्याय, अठ्थाईस, पद.", "Romans 8:28"),
     ],
 )
 def test_psalms_91_verse_2_forms(parser, text, expected):
