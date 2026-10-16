@@ -111,7 +111,7 @@ MORE = [
     ("Matthew ke fifth chapter ka third verse", "Matthew 5:3"),
     ("chapter 8 verse 28 of Romans", "Romans 8:28"),
     ("third chapter sixteenth verse of John", "John 3:16"),
-    ("जॉन के थर्ड चैप्टर का सिक्सटीन्थ वर्स", "John 3:16"),
+    ("जॉन के थर्ड चैप्टर का सोलहवाँ वर्स", "John 3:16"),
     ("psalm ke 23rd chapter ka first verse", "Psalms 23:1"),
     # Devanagari digits
     ("यूहन्ना ३ अध्याय १६ पद", "John 3:16"),

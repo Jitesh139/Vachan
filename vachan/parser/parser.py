@@ -9,7 +9,8 @@ in the text (the rolling transcript buffer ends with the newest speech).
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
@@ -17,44 +18,59 @@ from rapidfuzz import fuzz, process
 
 from vachan.core.models import BibleReference, ParseResult
 from vachan.core.paths import DATA_DIR
-from vachan.parser.normalizer import NumberNormalizer
+from vachan.parser.normalizer import NumberNormalizer, phonetic
 from vachan.parser.validator import CanonValidator
 
-CHAPTER_CUES = {"chapter", "chapters", "adhyay", "adhyaya", "अध्याय"}
-VERSE_CUES = {"verse", "verses", "pad", "aayat", "ayat", "पद", "आयत", "वचन"}
+CHAPTER_CUES = {"chapter", "chapters", "adhyay", "adhyaya", "adyay", "अध्याय"}
+VERSE_CUES = {"verse", "verses", "pad", "aayat", "ayat", "vachan", "bachan", "पद", "आयत", "वचन",
+              "बचन"}  # fmt: skip
+LINK_WORDS = {"ke", "ka", "ki", "के", "का", "की"}
+# Words that describe the book: "यूहन्ना रचित सुसमाचार", "रोमियों के नाम पौलुस की पत्री"
+GOSPEL_WORDS = {"rachit", "susamachar", "रचित", "सुसमाचार", "लिखित", "द्वारा", "gospel"}
+EPISTLE_WORDS = {"patri", "patra", "पत्री", "पत्र", "letter", "epistle"}
+DESCRIPTORS = GOSPEL_WORDS | EPISTLE_WORDS | {
+    "naam", "paulus", "pustak", "kitab", "नाम", "पौलुस", "पुस्तक", "किताब",
+}  # fmt: skip
 # Words allowed between a book name and its numbers ("Romans ke aath adhyay mein 28 pad")
 FILLERS = CHAPTER_CUES | VERSE_CUES | {
     "of", "the", "in", "number", "ke", "ka", "ki", "mein", "me", "se",
     "के", "का", "की", "में", "मे", "को", ":",
 }  # fmt: skip
+# "वचन" also means "word" ("परमेश्वर का वचन"): a verse-only follow-up with it needs one of these
+VERSE_ANCHORS = {"ab", "now", "अब", "में", "mein", "dekhiye", "padhiye", "देखिए", "पढ़िए", "से"}
 # Whisper writes a spoken number as a homophone ("verse to", "pad do"); only trusted right
 # after a chapter/verse cue word, where nothing but a number makes sense
 CUED_HOMOPHONES = {"to": 2, "too": 2, "tu": 2, "do": 2, "for": 4, "fore": 4, "won": 1, "ate": 8,
                    "डो": 2, "टू": 2}  # fmt: skip
 CONJUNCTIONS = {"and", "aur", "और"}  # "Psalms 91 and verse 2"
-RANGE_SEPS = {"-", "to", "through", "thru", "till", "until", "and", "se", "से", "और"}
+RANGE_SEPS = {"-", "to", "through", "thru", "till", "until", "and", "se", "से", "और", "aur"}
 # Words that make it likely a preacher is citing scripture
 CUE_WORDS = CHAPTER_CUES | VERSE_CUES | {
     "turn", "open", "read", "reading", "bible", "bibles", "scripture", "book", "says",
     "written", "dekhenge", "padhenge", "padhiye", "kholiye", "nikaliye", "nikalenge",
     "बाइबल", "बाइबिल", "पढ़ें", "पढ़िए", "पढ़ेंगे", "पढते", "देखें", "देखिए", "देखेंगे",
     "निकालिए", "निकालें", "निकालेंगे", "खोलिए", "खोलें", "लिखा", "पुस्तक", "वचन",
-}  # fmt: skip
-NEXT_PHRASES = {("next", "verse"), ("agla", "pad"), ("agli", "aayat"), ("अगला", "पद"),
-                ("अगली", "आयत"), ("अगला", "वचन"), ("following", "verse")}  # fmt: skip
-PREV_PHRASES = {("previous", "verse"), ("pichla", "pad"), ("pichhla", "pad"),
-                ("previous", "पद"), ("previous", "आयत"), ("previous", "वचन")}  # fmt: skip
+    "आइए", "aaiye", "kholen", "kholiye", "kholte", "dekhiye", "padhen", "padhte", "dekhen",
+} | DESCRIPTORS  # fmt: skip
+NEXT_WORDS = {"next", "following", "agla", "agli", "agle", "अगला", "अगली", "अगले"}
+PREV_WORDS = {"previous", "pichla", "pichli", "pichle"}  # Devanagari -> "previous" in normalize
 # Book names that are also everyday words / names - need a cue word to be trusted
 COMMON_WORD_BOOKS = {"mark", "job", "acts", "numbers", "james", "ruth", "jude", "amos",
                      "john", "song", "जॉब", "मार्क", "जॉन", "नंबर्स", "जेम्स",
-                     "सांस"}  # fmt: skip
+                     "सांस", "raja", "राजा", "राजाओं", "itihas", "इतिहास", "kings", "किंग्स",
+                     "peter", "पीटर", "पतरस", "timothy", "टिमोथी", "samuel", "सैमुअल"}  # fmt: skip
 NUMBER_PREFIXES = {
     1: ["1", "first", "pehla", "pahla", "pehli", "पहला", "पहली", "पहले", "प्रथम"],
     2: ["2", "second", "doosra", "dusra", "doosri", "दूसरा", "दूसरी", "दूसरे", "द्वितीय"],
     3: ["3", "third", "teesra", "tisra", "teesri", "तीसरा", "तीसरी", "तीसरे", "तृतीय"],
 }
 TYPED_ONLY_EXTRAS = {"PSA": ["bhajan"]}  # spoken "bhajan 23" is usually a hymn number
-SPEECH_EXTRAS = {"MAT": ["mathew"], "REV": ["revelations"], "PSA": ["psalm", "zabur", "zaboor"]}
+SPEECH_EXTRAS = {"MAT": ["mathew", "mathi"], "REV": ["revelations"], "JHN": ["yahunna"],
+                 "PSA": ["psalm", "zabur", "zaboor"]}  # fmt: skip
+# Gospel John vs the three letters ("यूहन्ना की पहली पत्री")
+EPISTLE_OF = {"JHN": "1JN"}
+ORDINAL_SUFFIX = re.compile(r"v[ei]?n?$")  # phonetic key of -वाँ/-वें/-वीं, -va/-ve/-van
+RAW_ORDINAL = re.compile(r"(?:[vw](?:aa|a|e|ee|i|ei)n?|व[ािीे]?ं?)$")  # "now" is not "nau-va"
 KNOWN_VERSIONS = {"esv": "ESV", "niv": "NIV", "kjv": "KJV", "nlt": "NLT", "nkjv": "NKJV",
                   "nasb": "NASB", "asv": "ASV", "irv": "HIN_IRV"}  # fmt: skip
 FUZZY_CUTOFF = 80.0
@@ -66,6 +82,7 @@ class _Alias:
     name: str
     typed_only: bool
     common_word: bool
+    bare: bool = False  # "कुरिन्थियों" without its 1/2: the number must come from a descriptor
 
 
 @dataclass(frozen=True)
@@ -74,6 +91,7 @@ class _BookHit:
     end: int
     alias: _Alias
     fuzzy: str = ""  # description when matched fuzzily
+    reasons: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -96,30 +114,79 @@ class ReferenceParser:
     ) -> None:
         self.normalizer = NumberNormalizer(hindi_numbers_path)
         self.validator = CanonValidator(verse_counts_path)
+        self._canon = self._build_canon()
         self._aliases: dict[tuple[str, ...], _Alias] = {}
+        self._names: dict[str, str] = {}
         self._load_books(books_path or DATA_DIR / "books.json")
         self._max_alias_len = max(len(k) for k in self._aliases)
         self._fuzzy_keys = {
             " ".join(k): a for k, a in self._aliases.items() if not a.typed_only and len(" ".join(k)) >= 4
         }
+        # same aliases under the spelling key; a key shared by two books is dropped
+        self._phon_aliases: dict[tuple[str, ...], Optional[_Alias]] = {}
+        for k, a in self._aliases.items():
+            pk = tuple(phonetic(t) for t in k)
+            old = self._phon_aliases.get(pk, a)
+            self._phon_aliases[pk] = a if old and old.book_id == a.book_id else None
 
     # ------------------------------------------------------------------ setup
-    def _key(self, alias: str) -> tuple[str, ...]:
-        return tuple(self.normalizer.tokenize(self.normalizer.normalize(alias)))
+    def _build_canon(self) -> dict[str, Optional[str]]:
+        """Spelling key -> known word: snaps "adhyaay", "racchit", "पहले" onto the vocabulary."""
+        words = (CHAPTER_CUES | VERSE_CUES | FILLERS | CUE_WORDS | LINK_WORDS | NEXT_WORDS
+                 | PREV_WORDS | CONJUNCTIONS | {"तक", "taq", "tak"})  # fmt: skip
+        self._vocab = words
+        canon: dict[str, Optional[str]] = {}
+        meaning: dict[str, object] = {}
+        entries = [(w, w) for w in sorted(words)]
+        entries += [(w, self.normalizer.hindi[w]) for w in sorted(self.normalizer.hindi)]
+        for word, sense in entries:
+            key = phonetic(word)
+            if key not in canon:
+                canon[key], meaning[key] = word, sense
+            elif isinstance(sense, int) or isinstance(meaning[key], int):
+                if meaning[key] != sense:  # "sat" 7 vs "saath" 60 must not merge
+                    canon[key] = None
+        return canon
 
-    def _add(self, alias: str, book_id: str, name: str, typed_only: bool) -> None:
+    def _canonical(self, token: str) -> str:
+        """Known word for a variant spelling; ordinal endings stripped ("solahwa" -> "solah")."""
+        if (
+            token.isdigit()
+            or token in self._vocab
+            or token in self.normalizer.hindi
+            or (token.isascii() and len(token) <= 2)
+        ):
+            return token
+        key = phonetic(token)
+        hit = self._canon.get(key)
+        if hit is None and key not in self._canon and RAW_ORDINAL.search(token):
+            for stem in (key[:-1] if key.endswith("n") else "", ORDINAL_SUFFIX.sub("", key)):
+                found = self._canon.get(stem) if stem and stem != key else None
+                if found in self.normalizer.hindi:
+                    return found
+        return hit or token
+
+    def _tokens(self, text: str) -> list[str]:
+        tokens = self.normalizer.tokenize(self.normalizer.normalize(text))
+        return [self._canonical(t) for t in tokens]
+
+    def _key(self, alias: str) -> tuple[str, ...]:
+        return tuple(self._tokens(alias))
+
+    def _add(self, alias: str, book_id: str, name: str, typed_only: bool, bare: bool = False) -> None:
         key = self._key(alias)
         existing = self._aliases.get(key)
         if not key or (existing and (typed_only or not existing.typed_only)):
             return
-        common = " ".join(key) in COMMON_WORD_BOOKS
-        self._aliases[key] = _Alias(book_id, name, typed_only, common)
+        common = " ".join(key) in COMMON_WORD_BOOKS or alias in COMMON_WORD_BOOKS
+        self._aliases[key] = _Alias(book_id, name, typed_only, common, bare)
 
     def _load_books(self, path: Path) -> None:
         books = json.loads(path.read_text(encoding="utf-8"))
         all_prefixes = {p for ps in NUMBER_PREFIXES.values() for p in ps}
         for b in books:
             bid, name = b["id"], b["name"]
+            self._names[bid] = name
             spoken = [name, b.get("hindi_name", ""), *b.get("roman_aliases", [])]
             spoken += b.get("spoken_aliases", []) + SPEECH_EXTRAS.get(bid, [])
             typed = b.get("abbreviations", []) + TYPED_ONLY_EXTRAS.get(bid, [])
@@ -132,6 +199,8 @@ class ReferenceParser:
             for alias in spoken:
                 if alias and alias.lower() not in TYPED_ONLY_EXTRAS.get(bid, []):
                     self._add(alias, bid, name, typed_only=False)
+            for base in bases if bid[0] == "1" else ():  # bare "कुरिन्थियों" -> 1 Cor until told
+                self._add(base, bid, name, typed_only=False, bare=True)
             for alias in typed:
                 self._add(alias, bid, name, typed_only=True)
 
@@ -149,20 +218,27 @@ class ReferenceParser:
         """
         if not text or not text.strip():
             return None
-        tokens = self.normalizer.tokenize(self.normalizer.normalize(text))
+        tokens = self._tokens(text)
         candidates: list[tuple[int, ParseResult]] = []
         consumed: set[int] = set()
 
         hits = self._find_books(tokens, typed)
+        free = 0  # numbers before a book may start here
         for k, hit in enumerate(hits):
             limit = hits[k + 1].start if k + 1 < len(hits) else len(tokens)
+            hit = self._describe(tokens, hit, limit)
             nums = self._scan_numbers(tokens, hit.end, limit)
-            if nums is None:
-                continue
+            if nums is None:  # "दूसरा अध्याय पहला वचन, यूहन्ना" / "chapter 3 verse 16 of John"
+                before = self._numbers_before(tokens, free, hit.start)
+                if before is None:
+                    continue
+                start, nums = before
+                hit, nums = replace(hit, start=start), replace(nums, end=hit.end)
             result = self._book_result(tokens, hit, nums, typed)
             if result is not None:
                 candidates.append((hit.start, result))
                 consumed.update(range(hit.start, nums.end))
+                free = nums.end
 
         if context_reference is not None:
             candidates += self._follow_ups(tokens, consumed, context_reference)
@@ -198,9 +274,13 @@ class ReferenceParser:
 
     def _exact_at(self, tokens: list[str], i: int, typed: bool) -> Optional[_BookHit]:
         for n in range(min(self._max_alias_len, len(tokens) - i), 0, -1):
-            alias = self._aliases.get(tuple(tokens[i : i + n]))
+            words = tuple(tokens[i : i + n])
+            alias = self._aliases.get(words)
             if alias and (typed or not alias.typed_only):
                 return _BookHit(i, i + n, alias)
+            alias = self._phon_aliases.get(tuple(map(phonetic, words)))
+            if alias and not alias.typed_only:  # same sound, other spelling: "romens", "mathi"
+                return _BookHit(i, i + n, alias, f"{' '.join(words)}->{alias.name} (spelling)")
         return None
 
     def _fuzzy_at(self, tokens: list[str], i: int, typed: bool) -> Optional[_BookHit]:
@@ -216,11 +296,71 @@ class ReferenceParser:
             )
             if not best:
                 continue
-            nums = self._scan_numbers(tokens, i + n, len(tokens))
+            nums = self._scan_numbers(tokens, self._skip_descriptors(tokens, i + n), len(tokens))
             # a guessed book name must be followed by a full chapter AND verse
             if nums and (nums.verse is not None or typed):
                 alias = self._fuzzy_keys[best[0]]
                 return _BookHit(i, i + n, alias, f"{phrase}->{alias.name} ({best[1]:.0f}%)")
+        return None
+
+    # ------------------------------------------------------------------ descriptors
+    def _ordinal_book_number(self, tokens: list[str], i: int, limit: int) -> Optional[int]:
+        """1-3 in "की पहली पत्री" (an ordinal directly before a letter word)."""
+        if i + 1 < limit and tokens[i + 1] in EPISTLE_WORDS:
+            parsed = self.normalizer.parse_number(tokens, i)
+            if parsed and parsed[1] == i + 1 and 1 <= parsed[0] <= 3:
+                return parsed[0]
+        return None
+
+    def _skip_descriptors(self, tokens: list[str], i: int, limit: Optional[int] = None) -> int:
+        limit = len(tokens) if limit is None else limit
+        while i < limit:
+            nxt = tokens[i + 1] if i + 1 < limit else ""
+            if tokens[i] in DESCRIPTORS or self._ordinal_book_number(tokens, i, limit):
+                i += 1
+            elif tokens[i] in LINK_WORDS and (
+                nxt in DESCRIPTORS or self._ordinal_book_number(tokens, i + 1, limit)
+            ):
+                i += 1
+            else:
+                break
+        return i
+
+    def _describe(self, tokens: list[str], hit: _BookHit, limit: int) -> _BookHit:
+        """Extend a book hit over "रचित सुसमाचार" / "की पहली पत्री" and pick the right book."""
+        end = self._skip_descriptors(tokens, hit.end, limit)
+        span = tokens[hit.end : end]
+        number = next(
+            (n for j in range(hit.end, end) if (n := self._ordinal_book_number(tokens, j, end))), None
+        )
+        book = hit.alias.book_id
+        letter = any(t in EPISTLE_WORDS for t in span)
+        family = EPISTLE_OF.get(book, book) if letter or hit.alias.bare else book
+        reasons = hit.reasons
+        if family[0] == "1" and number:
+            book = f"{number}{family[1:]}"
+        elif family != book or hit.alias.bare:
+            book = family
+            reasons += ("book_number_not_spoken",)  # "यूहन्ना की पत्री": 1 John assumed
+        if end == hit.end and book == hit.alias.book_id:
+            return hit
+        alias = replace(hit.alias, book_id=book, name=self._names[book], bare=False, common_word=False)
+        return replace(hit, end=end, alias=alias, reasons=reasons)
+
+    def _numbers_before(self, tokens: list[str], lo: int, hi: int) -> Optional[tuple[int, _Numbers]]:
+        """A full 'N अध्याय M पद' said just before the book name (only fillers in between)."""
+        for s in range(max(lo, hi - 12), hi):
+            if tokens[s] not in CHAPTER_CUES and self._number(tokens, s, hi) is None:
+                continue
+            nums = self._scan_numbers(tokens, s, hi)
+            if (
+                nums
+                and nums.verse is not None
+                and nums.chapter_cue
+                and hi - nums.end <= 2
+                and all(t in FILLERS for t in tokens[nums.end : hi])
+            ):
+                return s, nums
         return None
 
     # ------------------------------------------------------------------ numbers
@@ -276,7 +416,7 @@ class ReferenceParser:
         self, tokens: list[str], hit: _BookHit, nums: _Numbers, typed: bool
     ) -> Optional[ParseResult]:
         book = hit.alias
-        reasons: list[str] = []
+        reasons: list[str] = list(hit.reasons)
         chapter, verse, verse_end = nums.chapter, nums.verse, nums.verse_end
         raw = " ".join(tokens[hit.start : nums.end])
 
@@ -289,8 +429,9 @@ class ReferenceParser:
         has_cue = self._has_cue(tokens, hit.start, nums.end)
 
         if verse is None:
-            if book.common_word and not (typed or has_cue or nums.chapter_cue):
-                return None  # "John 3" in passing is not worth a suggestion
+            cued = typed or has_cue or nums.chapter_cue
+            if not cued and (book.common_word or not tokens[nums.end - 1].isdigit()):
+                return None  # "John 3" / "लूका एक वैद्य था" in passing is not worth a suggestion
             if not self.validator.is_valid_chapter(book.book_id, chapter):
                 return self._invalid(raw)
             reasons.append("chapter_only_no_verse")  # never default to verse 1 here
@@ -312,6 +453,8 @@ class ReferenceParser:
             reasons.append(f"fuzzy_book_match: {hit.fuzzy}")
         if any(r.startswith("number_split") for r in reasons):
             score -= 0.10
+        if "book_number_not_spoken" in reasons:
+            score -= 0.15
 
         ref = BibleReference(
             book_id=book.book_id,
@@ -357,12 +500,20 @@ class ReferenceParser:
             if i in consumed:
                 continue
             pair = (tok, tokens[i + 1] if i + 1 < len(tokens) else "")
-            if (pair in NEXT_PHRASES or pair in PREV_PHRASES) and ctx.verse_start is not None:
-                delta = 1 if pair in NEXT_PHRASES else -1
-                verse = (ctx.verse_end or ctx.verse_start) + 1 if delta > 0 else ctx.verse_start - 1
+            step = tok in NEXT_WORDS or tok in PREV_WORDS
+            if step and pair[1] in VERSE_CUES and ctx.verse_start is not None:
+                nxt = tok in NEXT_WORDS
+                verse = (ctx.verse_end or ctx.verse_start) + 1 if nxt else ctx.verse_start - 1
                 ref = self._ctx_ref(ctx, ctx.chapter, verse, None)
                 if ref:
                     out.append((i, ParseResult(ref, " ".join(pair), 0.9, True)))
+            elif tok in VERSE_CUES and (before := self._verse_before(tokens, i, consumed)):
+                start, verse, end = before  # "अब सातवें वचन में", "पाँचवें और छठे पद"
+                ref = self._ctx_ref(ctx, ctx.chapter, verse, end)
+                if ref:
+                    raw = " ".join(tokens[start : i + 1])
+                    why = relative + ("verse_only_follow_up",)
+                    out.append((start, ParseResult(ref, raw, 0.7, True, why)))
             elif tok in VERSE_CUES:
                 nums = self._number(tokens, i + 1, len(tokens), cued=True)
                 if nums and nums[1] - 1 not in consumed:
@@ -384,6 +535,29 @@ class ReferenceParser:
                         out.append((i, ParseResult(ref, raw, 0.7, True, why)))
                         consumed.update(range(i, nums.end))
         return out
+
+    def _verse_before(
+        self, tokens: list[str], cue: int, consumed: set[int]
+    ) -> Optional[tuple[int, int, Optional[int]]]:
+        """'N [और M] पद' ending at the cue word: (start, verse, verse_end)."""
+        if tokens[cue] in ("वचन", "vachan") and not (
+            (cue >= 1 and tokens[cue - 1] in VERSE_ANCHORS)
+            or any(t in VERSE_ANCHORS for t in tokens[max(0, cue - 4) : cue - 1] + tokens[cue + 1 : cue + 2])
+        ):
+            return None  # "पहला वचन परमेश्वर ने दिया"
+        for s in range(max(0, cue - 6), cue):
+            if consumed.intersection(range(s, cue)):
+                continue
+            first = self._number(tokens, s, cue)
+            if not first:
+                continue
+            if first[1] == cue:
+                return s, first[0], None
+            if tokens[first[1]] in RANGE_SEPS:
+                second = self._number(tokens, first[1] + 1, cue)
+                if second and second[1] == cue and second[0] > first[0]:
+                    return s, first[0], second[0]
+        return None
 
     def _ctx_ref(
         self, ctx: BibleReference, chapter: int, verse: Optional[int], verse_end: Optional[int]

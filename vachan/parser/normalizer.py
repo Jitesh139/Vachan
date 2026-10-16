@@ -22,19 +22,27 @@ ENGLISH_NUMBERS = {
     "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
     "nineteen": 19, "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
     "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10, "eleventh": 11,
-    "twelfth": 12,
+    "twelfth": 12, "thirteenth": 13, "fourteenth": 14, "fifteenth": 15, "sixteenth": 16,
+    "seventeenth": 17, "eighteenth": 18, "nineteenth": 19,
 }  # fmt: skip
 ENGLISH_TENS = {
     "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
-    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90, "twentieth": 20, "thirtieth": 30,
+    "fortieth": 40, "fiftieth": 50, "sixtieth": 60, "seventieth": 70, "eightieth": 80,
+    "ninetieth": 90,
 }  # fmt: skip
 HINDI_ORDINALS = {
     "पहला": 1, "पहली": 1, "पहले": 1, "दूसरा": 2, "दूसरी": 2, "दूसरे": 2,
     "तीसरा": 3, "तीसरी": 3, "तीसरे": 3, "चौथा": 4, "चौथी": 4, "चौथे": 4,
-    "छठा": 6, "छठी": 6, "छठे": 6,
+    "छठा": 6, "छठी": 6, "छठे": 6, "फर्स्ट": 1, "सेकंड": 2, "थर्ड": 3,
+    # romanized; other spellings reach these through the phonetic key
+    "pehla": 1, "pehli": 1, "pehle": 1, "dusra": 2, "dusri": 2, "dusre": 2,
+    "teesra": 3, "teesri": 3, "teesre": 3, "chautha": 4, "chauthi": 4, "chauthe": 4,
+    "chhatha": 6, "chhathi": 6, "chhathe": 6,
 }  # fmt: skip
 # Observed Whisper mishearings of Hindi numbers (only read inside book/chapter/verse structure)
-MISHEARD_NUMBERS = {"सुलह": 16, "सोला": 16, "sola": 16, "आत": 8, "अठाईस": 28, "अट्ठाइस": 28, "अठ्थाईस": 28}
+MISHEARD_NUMBERS = {"सुलह": 16, "सोला": 16, "sola": 16, "आत": 8, "अठाईस": 28, "अट्ठाइस": 28, "अठ्थाईस": 28,
+                   "तिरपन": 53, "tirpan": 53}  # fmt: skip
 # Romanized Hindi number words that are also everyday English/Hinglish words
 AMBIGUOUS_NUMBER_WORDS = {"do", "no", "to", "so"}
 
@@ -48,9 +56,47 @@ SPELLING_FIXES = [
     (_B + "नेक्स्ट" + _E, "next"),
     (_B + "(?:प्रीवियस|पिछला|पिछली|पिछले)" + _E, "previous"),
 ]
-ORDINAL_DIGITS = re.compile(r"\b(\d+)(st|nd|rd|th)\b")
+ORDINAL_DIGITS = re.compile(r"\b(\d+)\s?(?:st|nd|rd|th|va|ve|vi|vaan|van|ven|vein|wa|we|wan|wen)\b")
+# "5वें", "3रा", "1ला": Hindi ordinal endings written after digits
+DIGIT_HINDI_ORDINAL = re.compile(r"(\d)\s?(?:वां|वें|वीं|वा|वे|वी|रा|रे|री|था|थे|थी|ठा|ठे|ला|ले|ली)" + _E)
 HINDI_ORDINAL_SUFFIX = re.compile(_B + f"([{DEV}]+?)(वां|वें|वीं|वा|वे)" + _E)
 TOKEN_RE = re.compile(r"\d+|[a-z]+|[\u0900-\u0963\u0966-\u097f]+|[:\-]")
+
+
+# Devanagari -> Latin letters for the phonetic key (inherent "a" is never written: the key
+# drops every non-initial "a" anyway, which also hides schwa-deletion differences)
+_DEV_LATIN = {
+    **dict(zip("अआइईउऊएऐओऔऑऋ", ["a", "a", "i", "i", "u", "u", "e", "e", "o", "o", "o", "ri"])),
+    **dict(zip("ािीुूेैोौॉॅृ", ["a", "i", "i", "u", "u", "e", "e", "o", "o", "o", "e", "ri"])),
+    **dict(zip("कखगघङचछजझञटठडढणतथदधनपफबभमयरलवशषसह", [
+        "k", "kh", "g", "gh", "n", "ch", "ch", "j", "jh", "n", "t", "th", "d", "dh", "n",
+        "t", "th", "d", "dh", "n", "p", "f", "b", "bh", "m", "y", "r", "l", "v", "s", "s", "s", "h",
+    ])),
+    "ज": "y", "ं": "n", "ँ": "n", "ः": "", "्": "", "़": "",
+}  # fmt: skip
+# consonant digraphs only for Roman input (प+ह must not become "ph")
+_ROMAN_CONSONANTS = [("chh", "ch"), ("sh", "s"), ("ph", "f"), ("w", "v"), ("z", "j"), ("j", "y"),
+                     ("q", "k")]  # fmt: skip
+_VOWELS = [("aa", "a"), ("ee", "i"), ("ii", "i"), ("oo", "u"), ("uu", "u"), ("ai", "e"),
+           ("ae", "e"), ("ei", "e"), ("ey", "e"), ("au", "o"), ("ou", "o"), ("eh", "ah")]  # fmt: skip
+
+
+def phonetic(word: str) -> str:
+    """Script-independent spelling key: "यूहन्ना"/"yuhanna" -> "yuhn", "पहला"/"pehla" -> "phl".
+
+    Collapses long/short vowels, chh/ch, v/w, y/j/z, sh/s, doubled letters, nasal marks,
+    and drops every non-initial "a" (schwa). Lossy on purpose: only compare keys.
+    """
+    s = fold(word)
+    if s.isascii():
+        for a, b in _ROMAN_CONSONANTS:
+            s = s.replace(a, b)
+        s = re.sub(r"m(?=[^aeiou])", "n", s)  # samhita / संहिता
+    s = "".join(_DEV_LATIN.get(c, c) for c in s)
+    for a, b in _VOWELS:
+        s = s.replace(a, b)
+    s = s[:1] + s[1:].replace("a", "")
+    return re.sub(r"(.)\1+", r"\1", s)
 
 
 def fold(text: str) -> str:
@@ -77,6 +123,7 @@ class NumberNormalizer:
         text = re.sub(r"'s\b", "", text).replace("'", "")
         text = text.translate({0x0966 + i: str(i) for i in range(10)})  # ० - ९
         text = ORDINAL_DIGITS.sub(r"\1", text)
+        text = DIGIT_HINDI_ORDINAL.sub(r"\1", text)
         text = re.sub(r"\b(" + "|".join(ENGLISH_TENS) + r")-", r"\1 ", text)
         for pattern, repl in self._fixes:
             text = pattern.sub(repl, text)
