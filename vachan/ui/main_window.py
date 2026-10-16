@@ -648,9 +648,12 @@ class ControlWindow(QMainWindow):
                 self.banner.hide()
         t = self.transcriber
         if t.device != "not loaded":
-            gpu = t.device == "cuda"
+            gpu = t.device in ("cuda", "openvino-gpu")
+            where = {"cuda": "NVIDIA GPU", "openvino-gpu": "Intel GPU", "openvino-cpu": "CPU (OpenVINO)"}
+            where = where.get(t.device, "CPU")
             note = "" if gpu else f"  ·  {t.fallback_reason}" if t.fallback_reason else ""
-            self.engine_label.setText(f"Whisper {t.model_name} on {'GPU' if gpu else 'CPU'}{note}")
+            profile = f"{t.profile} · " if getattr(t, "profile", "") else ""
+            self.engine_label.setText(f"{profile}Whisper {t.model_name} on {where}{note}")
             self.engine_label.setStyleSheet(f"color: {theme.GREEN if gpu else theme.AMBER};")
 
     def _show_error(self, text: str) -> None:

@@ -22,7 +22,7 @@ from vachan.core.settings import DEFAULT_PROMPT, Settings
 from vachan.output.verse_window import THEMES
 
 MODELS = ["large-v3-turbo", "large-v3", "medium", "small", "base", "tiny"]
-STT_FIELDS = ("device", "model_gpu", "model_cpu")  # changing these needs a model reload
+STT_FIELDS = ("profile", "device", "model_gpu", "model_cpu")  # changing these needs a model reload
 
 
 def _combo(items: list[tuple[str, str]], current: str) -> QComboBox:
@@ -68,6 +68,18 @@ class SettingsDialog(QDialog):
         form.addRow("Silence threshold", self.silence)
 
         form.addRow(_section("Speech recognition"))
+        self.profile = _combo(
+            [
+                ("Automatic (best for this PC)", "auto"),
+                ("Accurate (slower on laptops)", "accurate"),
+                ("Balanced", "balanced"),
+                ("Fast (less accurate)", "fast"),
+                ("Custom (device and models below)", "custom"),
+            ],
+            s.profile,
+        )
+        self.profile.setToolTip("Engine order: NVIDIA GPU, then Intel GPU (OpenVINO), then CPU")
+        form.addRow("Speed profile", self.profile)
         self.stt_device = _combo(
             [("Automatic (GPU if available)", "auto"), ("NVIDIA GPU (CUDA)", "cuda"), ("CPU only", "cpu")],
             s.device,
@@ -136,6 +148,7 @@ class SettingsDialog(QDialog):
             input_device=self.device.currentData(),
             input_gain=self.gain.value(),
             silence_rms=self.silence.value(),
+            profile=self.profile.currentData(),
             device=self.stt_device.currentData(),
             model_gpu=self.model_gpu.currentData(),
             model_cpu=self.model_cpu.currentData(),
