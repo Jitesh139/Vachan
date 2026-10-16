@@ -1,7 +1,8 @@
 # Vachan (वचन)
 
 Vachan listens to a sermon in **Hindi, English or Hinglish**, recognises Bible references
-("Turn to John chapter 3 verse 16", "यूहन्ना 3 अध्याय 16 पद", "Romans ke aath adhyay mein 28 pad"),
+("Turn to John chapter 3 verse 16", "यूहन्ना रचित सुसमाचार दूसरा अध्याय पहला वचन",
+"कुरिन्थियों की पहली पत्री तेरहवाँ अध्याय चौथा पद", "Romans ke aath adhyay mein 28 pad"),
 and shows the verse on a clean broadcast card that Wirecast (or OBS/vMix) captures.
 Everything runs offline after the first start.
 
@@ -36,9 +37,13 @@ Later runs start in seconds.
 3. When a reference is heard, the **Suggestion** card shows the verse, a confidence badge and any warnings
    (e.g. "NIV is not available offline - showing KJV", "Book name guessed"). Press **Enter** to put it on
    screen, **Esc** to dismiss.
-4. "Next verse", "अगला पद", "verse 17", "chapter 4 verse 1" work relative to the verse on screen.
+4. "Next verse", "अगला वचन", "पिछला पद", "verse 17", "अब सातवें वचन में", "chapter 4 verse 1" work relative
+   to the verse on screen.
 5. **Find a verse** (Ctrl+F): type `John 3:16`, `Jn 3 16`, `यूहन्ना ३:१६`, then Enter → suggestion card → Enter to show.
 6. **Clear screen** (F8) blanks the output. **Shown this service** lists everything shown; double-click to reload.
+7. **Missed verse** (F7): Vachan did not catch a reference? Press F7 and type the right one (`John 2:1`).
+   The last 30 s of transcript (and saved audio, if *Save audio* is on) go to `data\corpus\missed.jsonl`,
+   which stays on this PC. `scripts\eval_corpus.py` replays it and lists every miss, so it can be fixed.
 
 Mode **Manual approve** is the default and recommended: a wrong verse on a live stream is worse than none.
 **Auto-show** only shows suggestions with ≥ 90 % confidence and no warnings.
@@ -47,6 +52,7 @@ Mode **Manual approve** is the default and recommended: a wrong verse on a live 
 |---|---|
 | Enter / Esc | Show / dismiss suggestion |
 | F5 | Start / stop listening |
+| F7 | Missed verse: save the last 30 s with the right reference |
 | F8 | Clear output |
 | F9 | Show / hide output window |
 | Ctrl+F | Find a verse |
@@ -101,12 +107,14 @@ Fonts: Noto Serif, Noto Serif/Sans Devanagari (SIL Open Font License, `assets/fo
 
 ```cmd
 venv\Scripts\pip install -r requirements-dev.txt
-venv\Scripts\python -m pytest -q                 :: 289 tests
+venv\Scripts\python -m pytest -q                 :: 520 tests
 venv\Scripts\python scripts\test_speech.py       :: TTS -> Whisper -> reference -> verse
 venv\Scripts\python scripts\test_speech.py --mic 8      :: your own voice
 venv\Scripts\python scripts\test_speech.py --realtime   :: live pipeline + latency
-venv\Scripts\python scriptsepeat_ui_test.py --runs 10  :: Psalm 91:2 en/hi/Hinglish, card == output
-venv\Scripts\python scriptsenchmark_stt.py --md tmpench.md  :: compare STT engines on this PC
+venv\Scripts\python scripts\test_speech.py --set hindi  :: spoken-Hindi citations, Whisper vs parser table
+venv\Scripts\python scripts\eval_corpus.py      :: replay missed verses saved with F7
+venv\Scripts\python scripts\repeat_ui_test.py --runs 10  :: Psalm 91:2 en/hi/Hinglish, card == output
+venv\Scripts\python scripts\benchmark_stt.py --md tmp\bench.md  :: compare STT engines on this PC
 venv\Scripts\python scripts\soak_test.py --minutes 30
 venv\Scripts\python scripts\capture_ui.py --scale 1.25  :: screenshots
 build.bat                                        :: dist\Vachan\Vachan.exe (PyInstaller one-folder)
