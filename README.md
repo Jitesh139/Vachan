@@ -93,7 +93,7 @@ Fonts: Noto Serif, Noto Serif/Sans Devanagari (SIL Open Font License, `assets/fo
 
 | Symptom | Fix |
 |---|---|
-| Meter moves but nothing is recognised | Footer → **Debug**: each line shows RMS, Whisper text and the parser result. Tick *Save audio* to keep the exact WAV sent to Whisper (`debug_audio\`). Full log: `logs\pipeline.log`. |
+| Meter moves but nothing is recognised | Footer → **Debug**: each line shows RMS, Whisper text and the parser result. Tick *Save audio* to keep the exact WAV sent to Whisper (`debug_audio\`); `venv\Scripts\python scripts\check_audio.py` reports its level, noise and clipping. Full log: `logs\pipeline.log`. |
 | Meter does not move | Pick the right Input; check Windows *Sound settings → Input* and microphone privacy permission. Raise *Input gain* in Settings. |
 | Footer says *CPU* / "No NVIDIA GPU detected" | Update the NVIDIA driver, then delete `venv\installed.txt` and run `run.bat` again so the CUDA libraries are installed. `venv\Scripts\python scripts\check_gpu.py` shows what CTranslate2 sees. |
 | "GPU failed: … cublas64_12.dll" | CUDA libraries missing: `venv\Scripts\pip install -r requirements-gpu.txt`. |
@@ -107,7 +107,7 @@ Fonts: Noto Serif, Noto Serif/Sans Devanagari (SIL Open Font License, `assets/fo
 
 ```cmd
 venv\Scripts\pip install -r requirements-dev.txt
-venv\Scripts\python -m pytest -q                 :: 520 tests
+venv\Scripts\python -m pytest -q                 :: 667 tests
 venv\Scripts\python scripts\test_speech.py       :: TTS -> Whisper -> reference -> verse
 venv\Scripts\python scripts\test_speech.py --mic 8      :: your own voice
 venv\Scripts\python scripts\test_speech.py --realtime   :: live pipeline + latency
