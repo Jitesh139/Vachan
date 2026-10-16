@@ -129,6 +129,8 @@ class WhisperTranscriber:
                         self.fallback_reason = f"GPU failed: {e}"
             elif not self.fallback_reason:
                 self.fallback_reason = "No NVIDIA GPU detected"
+            if self.force:  # a profile tries its next engine instead of this model on CPU
+                raise RuntimeError(self.fallback_reason)
         self._try_load(model_cpu, "cpu", "int8", progress)
 
     def _try_load(self, name: str, device: str, compute: str, progress: Callable) -> None:

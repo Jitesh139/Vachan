@@ -30,6 +30,7 @@ class Settings:
     partial_sec: float = 1.0  # live transcript refresh while speaking; 0 = off
     lang_reset_sec: float = 3.0  # silence after which the language is detected again
     silence_rms: float = 0.002  # below this audio is not even checked for speech
+    profile: str = "auto"  # auto | accurate | balanced | fast | custom (= device/model below)
     device: str = "auto"  # auto | cuda | cpu
     model_gpu: str = "large-v3-turbo"
     model_cpu: str = "small"
