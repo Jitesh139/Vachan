@@ -73,7 +73,7 @@ def main() -> int:
     from vachan.core.settings import Settings
     from vachan.output.verse_window import VerseDisplayWindow
     from vachan.parser import ReferenceParser
-    from vachan.stt.transcriber import WhisperTranscriber
+    from vachan.stt.profiles import ProfileTranscriber
     from vachan.ui import theme
     from vachan.ui.main_window import ControlWindow
 
@@ -93,7 +93,7 @@ def main() -> int:
         return 1
 
     output = VerseDisplayWindow(settings.theme, settings.display_mode)
-    window = ControlWindow(settings, WhisperTranscriber(settings), parser, bible, output, error)
+    window = ControlWindow(settings, ProfileTranscriber(settings), parser, bible, output, error)
     window.show()
     output.show()
     return app.exec()

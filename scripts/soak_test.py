@@ -46,7 +46,7 @@ def main() -> int:
     from vachan.core.settings import Settings
     from vachan.output.verse_window import VerseDisplayWindow
     from vachan.parser import ReferenceParser
-    from vachan.stt.transcriber import WhisperTranscriber
+    from vachan.stt.profiles import ProfileTranscriber
     from vachan.ui import theme
     from vachan.ui.main_window import ControlWindow
 
@@ -58,7 +58,7 @@ def main() -> int:
     settings.save = lambda *a: None  # leave the user's settings.json alone
     output = VerseDisplayWindow()
     win = ControlWindow(
-        settings, WhisperTranscriber(settings), ReferenceParser(), LocalSqliteBibleProvider(), output
+        settings, ProfileTranscriber(settings), ReferenceParser(), LocalSqliteBibleProvider(), output
     )
     win.audio = win.pipeline.audio = FileAudioSource(loop_wav, loop=True)
     win.btn_debug.setChecked(True)

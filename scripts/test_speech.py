@@ -27,7 +27,7 @@ from vachan.core.paths import APP_DIR  # noqa: E402
 from vachan.core.pipeline import PipelineEvents, PipelineWorker  # noqa: E402
 from vachan.core.settings import Settings  # noqa: E402
 from vachan.parser import ReferenceParser  # noqa: E402
-from vachan.stt.transcriber import WhisperTranscriber  # noqa: E402
+from vachan.stt.profiles import ProfileTranscriber  # noqa: E402
 
 JOHN_3_16 = BibleReference("JHN", "John", 3, 16)
 # (TTS voice, phrase, expected reference, context for follow-ups)
@@ -174,6 +174,7 @@ def main() -> int:
     ap.add_argument("--list-devices", action="store_true")
     ap.add_argument("--device", default=None, choices=["auto", "cpu", "cuda"])
     ap.add_argument("--model", default=None)
+    ap.add_argument("--profile", default=None, choices=["auto", "accurate", "balanced", "fast", "custom"])
     args = ap.parse_args()
 
     if args.list_devices:
@@ -186,7 +187,11 @@ def main() -> int:
         settings.device = args.device
     if args.model:
         settings.model_gpu = settings.model_cpu = args.model
-    stt = WhisperTranscriber(settings)
+    if args.device or args.model:
+        settings.profile = "custom"
+    if args.profile:
+        settings.profile = args.profile
+    stt = ProfileTranscriber(settings)
     stt.load(lambda msg: print(f"[stt] {msg}"))
     if stt.fallback_reason:
         print(f"[stt] note: {stt.fallback_reason}")
@@ -223,7 +228,8 @@ def main() -> int:
         else:
             ok = run_direct(worker, read_wav(path), expected)
         passed += ok
-    print(f"\n{passed}/{len(cases)} passed  (Whisper {stt.model_name} on {stt.device.upper()})")
+    engine = f"{stt.profile}: Whisper {stt.model_name} on {stt.device.upper()}"
+    print(f"\n{passed}/{len(cases)} passed  ({engine})")
     return 0 if passed == len(cases) else 1
 
 

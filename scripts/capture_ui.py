@@ -32,7 +32,7 @@ def main() -> int:
     from vachan.core.settings import Settings
     from vachan.output.verse_window import VerseDisplayWindow
     from vachan.parser import ReferenceParser
-    from vachan.stt.transcriber import WhisperTranscriber
+    from vachan.stt.profiles import ProfileTranscriber
     from vachan.ui import theme
     from vachan.ui.main_window import ControlWindow
 
@@ -42,7 +42,7 @@ def main() -> int:
     settings = Settings(theme=args.theme, display_mode=args.mode)
     parser, bible = ReferenceParser(), LocalSqliteBibleProvider()
     output = VerseDisplayWindow(args.theme, args.mode)
-    win = ControlWindow(settings, WhisperTranscriber(settings), parser, bible, output)
+    win = ControlWindow(settings, ProfileTranscriber(settings), parser, bible, output)
     win.settings.save = lambda *a: None  # never touch the user's settings.json
 
     def suggest(text: str, ctx=None):
