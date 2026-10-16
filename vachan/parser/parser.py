@@ -176,7 +176,9 @@ class ReferenceParser:
     def _add(self, alias: str, book_id: str, name: str, typed_only: bool, bare: bool = False) -> None:
         key = self._key(alias)
         existing = self._aliases.get(key)
-        if not key or (existing and (typed_only or not existing.typed_only)):
+        if not key or all(t.isdigit() for t in key):  # "1Th" normalizes to "1"
+            return
+        if existing and (typed_only or not existing.typed_only):
             return
         common = " ".join(key) in COMMON_WORD_BOOKS or alias in COMMON_WORD_BOOKS
         self._aliases[key] = _Alias(book_id, name, typed_only, common, bare)

@@ -161,7 +161,13 @@ def test_chapter_only_is_flagged(parser):
 
 @pytest.mark.parametrize(
     "text,expected",
-    [("Jn 3:16", "John 3:16"), ("1 Cor 13:4", "1 Corinthians 13:4"), ("Ps 23", "Psalms 23")],
+    [
+        ("Jn 3:16", "John 3:16"),
+        ("1 Cor 13:4", "1 Corinthians 13:4"),
+        ("Ps 23", "Psalms 23"),
+        ("Rom 2:1", "Romans 2:1"),
+        ("Jn 2:1", "John 2:1"),
+    ],  # "1Th" must not make "1" a book
 )
 def test_abbreviations_only_when_typed(parser, text, expected):
     assert fmt(parser.parse(text, typed=True)) == expected
