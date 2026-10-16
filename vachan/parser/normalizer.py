@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import json
 import re
-from functools import lru_cache
 import unicodedata
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -35,7 +35,8 @@ ENGLISH_TENS = {
 HINDI_ORDINALS = {
     "पहला": 1, "पहली": 1, "पहले": 1, "दूसरा": 2, "दूसरी": 2, "दूसरे": 2,
     "तीसरा": 3, "तीसरी": 3, "तीसरे": 3, "चौथा": 4, "चौथी": 4, "चौथे": 4,
-    "छठा": 6, "छठी": 6, "छठे": 6, "फर्स्ट": 1, "सेकंड": 2, "थर्ड": 3,
+    "छठा": 6, "छठी": 6, "छठे": 6, "नवां": 9, "नवें": 9, "नवा": 9, "नवे": 9, "नवी": 9,
+    "फर्स्ट": 1, "सेकंड": 2, "थर्ड": 3,
     # romanized; other spellings reach these through the phonetic key
     "pehla": 1, "pehli": 1, "pehle": 1, "dusra": 2, "dusri": 2, "dusre": 2,
     "teesra": 3, "teesri": 3, "teesre": 3, "chautha": 4, "chauthi": 4, "chauthe": 4,
@@ -98,7 +99,7 @@ def phonetic(word: str) -> str:
     for a, b in _VOWELS:
         s = s.replace(a, b)
     s = s[:1] + s[1:].replace("a", "")
-    return re.sub(r"(.)\1+", r"\1", s)
+    return re.sub(r"(ch|th|dh|kh|gh|bh|jh|.)\1+", r"\1", s)  # "रच्चित" = "rachit"
 
 
 def fold(text: str) -> str:

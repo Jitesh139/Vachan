@@ -255,3 +255,33 @@ def test_chapter_only_keeps_verse_none(parser):
 def test_descriptor_is_high_confidence(parser):
     res = parser.parse("यूहन्ना रचित सुसमाचार दूसरा अध्याय पहला वचन")
     assert res.confidence >= 0.9, res
+
+
+# Verbatim Whisper large-v3-turbo output for the SEED phrases (edge-tts hi-IN-MadhurNeural)
+REAL_WHISPER = [
+    ("यूहन्ना, रचित, सुस्माचार, दूसरा, अध्याय, पहला वचन.", "John 2:1"),
+    ("यूहन्ना, रच्चित, सुस्मचार, दूसरा, अध्याय, पेहला वचन.", "John 2:1"),
+    ("आईए हम खोले मत्ती रचित सुस्माचार के पाँचवें अध्याय का तीसरा वचन.", "Matthew 5:3"),
+    ("लुका रचित सुस्मचार चौथा अध्याय सोलवा पैड.", "Luke 4:16"),
+    ("रोमियों की पत्री आठवें अध्याय का 28 वापद.", "Romans 8:28"),
+    ("कुरिंथियों की पहली पत्री 13 अध्याय, चौथापद.", "1 Corinthians 13:4"),
+    ("भजन संहिता 91 अध्याय दूसरा पद.", "Psalms 91:2"),
+    ("प्रेरितों के काम दूसरे अध्याय का चौथा बचन.", "Acts 2:4"),
+    ("उत्पत्ति पहले अध्याय का पहला बचन", "Genesis 1:1"),
+    ("इफिसियों दूसरे अध्याय का आठवा और नवापद.", "Ephesians 2:8-9"),
+    ("नीतिवचन तीसरे अध्याय पाँचवें और छठे पद.", "Proverbs 3:5-6"),
+    ("यूहन्ना की पहली पत्री, चौथा अध्याय, आठ्वा वचन.", "1 John 4:8"),
+    ("प्रकाशित वाक्य 21 अध्याय चौथापद", "Revelation 21:4"),
+    ("John के तीसरे अध्याय का सोलहवा वचन.", "John 3:16"),
+    ("Chapter 3, verse 16 of John", "John 3:16"),
+]
+
+
+@pytest.mark.parametrize("text,expected", REAL_WHISPER)
+def test_real_whisper_output(parser, text, expected):
+    assert fmt(parser.parse(text)) == expected
+
+
+@pytest.mark.parametrize("text", ["आज का प्रवचन", "नीतिवचन की पुस्तक", "यह आपद है"])
+def test_glued_cue_split_only_after_numbers(parser, text):
+    assert fmt(parser.parse(text)) is None

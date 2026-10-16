@@ -23,7 +23,9 @@ from vachan.parser.validator import CanonValidator
 
 CHAPTER_CUES = {"chapter", "chapters", "adhyay", "adhyaya", "adyay", "अध्याय"}
 VERSE_CUES = {"verse", "verses", "pad", "aayat", "ayat", "vachan", "bachan", "पद", "आयत", "वचन",
-              "बचन"}  # fmt: skip
+              "बचन", "पैड"}  # fmt: skip
+GLUED_CUE = re.compile("(.+?)(पद|वचन|बचन)$")  # Whisper: "चौथापद", "नवापद", "28 वापद"
+SUFFIX_ONLY = {"वा", "वां", "वे", "वें", "वी", "वीं"}  # ordinal ending left after a digit
 LINK_WORDS = {"ke", "ka", "ki", "के", "का", "की"}
 # Words that describe the book: "यूहन्ना रचित सुसमाचार", "रोमियों के नाम पौलुस की पत्री"
 GOSPEL_WORDS = {"rachit", "susamachar", "रचित", "सुसमाचार", "लिखित", "द्वारा", "gospel"}
@@ -167,8 +169,15 @@ class ReferenceParser:
         return hit or token
 
     def _tokens(self, text: str) -> list[str]:
-        tokens = self.normalizer.tokenize(self.normalizer.normalize(text))
-        return [self._canonical(t) for t in tokens]
+        out: list[str] = []
+        for tok in self.normalizer.tokenize(self.normalizer.normalize(text)):
+            glued = GLUED_CUE.match(tok)
+            head = self._canonical(glued.group(1)) if glued else ""
+            if head in SUFFIX_ONLY or head in self.normalizer.hindi:  # split "चौथापद" only
+                out += ([] if head in SUFFIX_ONLY else [head]) + [glued.group(2)]
+            else:
+                out.append(self._canonical(tok))
+        return out
 
     def _key(self, alias: str) -> tuple[str, ...]:
         return tuple(self._tokens(alias))
