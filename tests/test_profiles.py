@@ -52,16 +52,22 @@ def test_auto_without_nvidia_uses_intel_gpu(machine):
     machine["ov"] = ["CPU", "GPU"]
     t = profiles.ProfileTranscriber(Settings(profile="auto"))
     t.load()
-    assert (t.profile, t.device, t.model_name) == ("balanced", "openvino-gpu", "small")
+    assert (t.profile, t.device, t.model_name) == ("accurate", "openvino-gpu", "large-v3-turbo")
     assert "no NVIDIA GPU" in t.fallback_reason
-    assert machine["built"] == [("ov", "small", "GPU")]  # cuda skipped without building
+    assert machine["built"] == [("ov", "large-v3-turbo", "GPU")]  # cuda skipped without building
+
+
+def test_auto_on_cpu_only_machine_is_balanced(machine):
+    t = profiles.ProfileTranscriber(Settings(profile="auto"))
+    t.load()
+    assert (t.profile, t.device, t.model_name) == ("balanced", "cpu", "small")
 
 
 def test_falls_through_to_cpu_when_igpu_fails(machine):
     machine["ov"], machine["fail"] = ["GPU"], {"GPU": RuntimeError("driver")}
-    t = profiles.ProfileTranscriber(Settings(profile="fast"))
+    t = profiles.ProfileTranscriber(Settings(profile="balanced"))
     t.load()
-    assert (t.device, t.model_name) == ("cpu", "base")
+    assert (t.device, t.model_name) == ("cpu", "small")
     assert "GPU failed: driver" in t.fallback_reason
     assert t.transcribe(np.zeros(16000, np.float32)).text == "hello"
 
@@ -81,7 +87,7 @@ def test_unload_then_new_profile(machine):
     assert t.device == "not loaded"
     s.profile = "accurate"
     t.load()
-    assert (t.profile, t.model_name) == ("accurate", "medium")
+    assert (t.profile, t.model_name) == ("accurate", "medium")  # CPU-only fake machine
 
 
 def test_unknown_profile_falls_back_to_balanced():

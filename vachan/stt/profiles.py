@@ -23,9 +23,9 @@ OV_REPO = "OpenVINO/whisper-{}-int8-ov"
 
 # (engine, model, device); engine "fw" = faster-whisper, "ov" = OpenVINO
 PROFILES: dict[str, list[tuple[str, str, str]]] = {
-    "accurate": [("fw", "large-v3-turbo", "cuda"), ("ov", "medium", "GPU"), ("fw", "medium", "cpu")],
+    "accurate": [("fw", "large-v3-turbo", "cuda"), ("ov", "large-v3-turbo", "GPU"), ("fw", "medium", "cpu")],
     "balanced": [("fw", "large-v3-turbo", "cuda"), ("ov", "small", "GPU"), ("fw", "small", "cpu")],
-    "fast": [("fw", "small", "cuda"), ("ov", "base", "GPU"), ("fw", "base", "cpu")],
+    "fast": [("fw", "small", "cuda"), ("ov", "small", "GPU"), ("ov", "base", "CPU"), ("fw", "base", "cpu")],
 }
 PROFILE_NAMES = ["auto", *PROFILES, "custom"]
 
@@ -41,9 +41,10 @@ def has_nvidia() -> bool:
 
 
 def resolve(profile: str) -> str:
-    """'auto' -> accurate on an NVIDIA machine, balanced (the benchmarked laptop default) otherwise."""
+    """'auto' -> accurate with an NVIDIA or Intel Arc GPU (large-v3-turbo: 1.2 s per 5 s on the
+    Arc iGPU), balanced on a CPU-only machine (medium on CPU is slower than real time)."""
     if profile == "auto":
-        return "accurate" if has_nvidia() else "balanced"
+        return "accurate" if has_nvidia() or "GPU" in openvino_devices() else "balanced"
     return profile if profile in PROFILES or profile == "custom" else "balanced"
 
 
