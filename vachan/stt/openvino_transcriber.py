@@ -98,6 +98,12 @@ class OpenVinoTranscriber:
                 detected = self._last_language
                 text, _ = self._generate(audio, detected)
             language = self._last_language = detected
+        # with a prompt OpenVINO ignores the language token and its report is often "ko"/"ur" on
+        # short windows, so tag what was written: Devanagari -> hi, Latin -> en
+        deva = sum("ऀ" <= c <= "ॿ" for c in text)
+        latin = sum(c.isascii() and c.isalpha() for c in text)
+        if deva or latin:
+            language = self._last_language = "hi" if deva >= latin else "en"
         return Transcript(text, language, time.perf_counter() - t0)
 
     def _generate(self, audio: np.ndarray, language: Optional[str]) -> tuple[str, str]:
