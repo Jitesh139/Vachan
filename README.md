@@ -22,13 +22,17 @@ More: [Parchment / Hindi only](docs/screenshots/output_parchment_secondary_100.p
 
 The first run creates `venv\`, installs the pinned packages (plus about 1 GB of CUDA libraries
 if an NVIDIA GPU is present), downloads the Bible texts (~20 MB) and, on first Start, the
-Whisper model (large-v3-turbo ≈ 1.6 GB on GPU, small ≈ 480 MB on CPU). Later runs start in seconds.
+Whisper model (large-v3-turbo ≈ 1.6 GB on an NVIDIA or Intel Arc GPU, small ≈ 480 MB on CPU).
+On a PC without NVIDIA, `run.bat` also installs OpenVINO so an Intel Arc integrated GPU is used.
+Later runs start in seconds.
 
 ## Using it during a service
 
 1. Pick the **Input** (the mixer / USB audio interface) at the top. The meter must move when someone speaks.
-2. Press **Start listening** (F5). The footer shows `Whisper large-v3-turbo on GPU` (green) or the CPU
-   fallback reason (amber).
+2. Press **Start listening** (F5). The footer shows the profile and engine, e.g.
+   `accurate · Whisper large-v3-turbo on NVIDIA GPU` (green) or the CPU fallback reason (amber), and
+   `delay 1.8 s`: the measured time from the end of a phrase to the suggestion.
+   Settings → **Speed profile**: *Automatic* picks the best for the PC (benchmarks: docs/BENCHMARKS.md).
 3. When a reference is heard, the **Suggestion** card shows the verse, a confidence badge and any warnings
    (e.g. "NIV is not available offline - showing KJV", "Book name guessed"). Press **Enter** to put it on
    screen, **Esc** to dismiss.
@@ -90,16 +94,19 @@ Fonts: Noto Serif, Noto Serif/Sans Devanagari (SIL Open Font License, `assets/fo
 | "GPU error (out of memory); switched to CPU" | Close other GPU apps, or choose `small` as GPU model in Settings. |
 | "Whisper model … is not downloaded" | Connect to the internet once and press Start; the model is cached in `%USERPROFILE%\.cache\huggingface`. |
 | "No audio from … unplugged?" | Reconnect the device; Vachan retries every few seconds and resumes. |
+| Suggestions are slow (footer delay > 3 s) | Plug the laptop in (Vachan warns at start-up on battery or low RAM), close Chrome, or choose Settings → Speed profile → *Balanced* / *Fast*. |
 | Wrong language transcription | Settings → Language: force *Hindi* or *English* instead of auto. |
 
 ## Development
 
 ```cmd
 venv\Scripts\pip install -r requirements-dev.txt
-venv\Scripts\python -m pytest -q                 :: 179 tests
+venv\Scripts\python -m pytest -q                 :: 289 tests
 venv\Scripts\python scripts\test_speech.py       :: TTS -> Whisper -> reference -> verse
 venv\Scripts\python scripts\test_speech.py --mic 8      :: your own voice
 venv\Scripts\python scripts\test_speech.py --realtime   :: live pipeline + latency
+venv\Scripts\python scriptsepeat_ui_test.py --runs 10  :: Psalm 91:2 en/hi/Hinglish, card == output
+venv\Scripts\python scriptsenchmark_stt.py --md tmpench.md  :: compare STT engines on this PC
 venv\Scripts\python scripts\soak_test.py --minutes 30
 venv\Scripts\python scripts\capture_ui.py --scale 1.25  :: screenshots
 build.bat                                        :: dist\Vachan\Vachan.exe (PyInstaller one-folder)

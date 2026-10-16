@@ -68,6 +68,11 @@ Medium is not used on the iGPU: turbo there is faster *and* more accurate.
 `scripts/test_speech.py --realtime --profile auto` plays each phrase in real time through the live
 pipeline. It measures the time from the end of the spoken phrase to the suggestion on the card.
 Result on this laptop, **on battery**, accurate profile → large-v3-turbo on the Arc iGPU:
-**1.50–2.20 s** over 11 phrases (target ≤ 3 s). That includes the 0.5 s pause that ends a phrase.
+**1.47–2.70 s**, 14/14 phrases correct (second run, after the parser fixes; the first run gave 1.50–2.20 s).
+Target ≤ 3 s. The delay includes the 0.5 s pause that ends a phrase.
+
+`scripts/repeat_ui_test.py --runs 10` plays Psalm 91:2 in English, Hindi and Hinglish 10 times each,
+in real time, through the real operator window, pressing Show on every card. Result:
+**30/30 suggestions, card == output window 30/30, all Psalms 91:2.**
 
 Not measured yet: the RTX 5060 desktop (expected to be faster: large-v3-turbo float16 on CUDA).
