@@ -79,8 +79,9 @@ def add_cuda_dll_dirs() -> None:
 class WhisperTranscriber:
     """Transcriber backed by faster-whisper / CTranslate2."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, force: Optional[tuple[str, str]] = None) -> None:
         self.settings = settings
+        self.force = force  # (model, "cuda" | "cpu") chosen by a profile; None = settings
         self.device = "not loaded"
         self.model_name = ""
         self.fallback_reason = ""  # why we are not on the GPU, shown in the UI
@@ -104,8 +105,12 @@ class WhisperTranscriber:
     def _load(self, progress: Callable[[str], None]) -> None:
         import ctranslate2
 
-        want_gpu = self.settings.device in ("auto", "cuda")
-        if want_gpu:
+        s = self.settings
+        device, model_gpu, model_cpu = s.device, s.model_gpu, s.model_cpu
+        if self.force:
+            model_gpu = model_cpu = self.force[0]
+            device = self.force[1]
+        if device in ("auto", "cuda"):
             add_cuda_dll_dirs()
             try:
                 gpus = ctranslate2.get_cuda_device_count()
@@ -114,7 +119,7 @@ class WhisperTranscriber:
             if gpus:
                 for compute in ("float16", "int8_float16"):
                     try:
-                        self._try_load(self.settings.model_gpu, "cuda", compute, progress)
+                        self._try_load(model_gpu, "cuda", compute, progress)
                         self.fallback_reason = ""
                         return
                     except ModelUnavailable:
@@ -124,7 +129,7 @@ class WhisperTranscriber:
                         self.fallback_reason = f"GPU failed: {e}"
             elif not self.fallback_reason:
                 self.fallback_reason = "No NVIDIA GPU detected"
-        self._try_load(self.settings.model_cpu, "cpu", "int8", progress)
+        self._try_load(model_cpu, "cpu", "int8", progress)
 
     def _try_load(self, name: str, device: str, compute: str, progress: Callable) -> None:
         from faster_whisper import WhisperModel
