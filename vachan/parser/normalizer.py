@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from functools import lru_cache
 import unicodedata
 from pathlib import Path
 from typing import Optional
@@ -81,6 +82,7 @@ _VOWELS = [("aa", "a"), ("ee", "i"), ("ii", "i"), ("oo", "u"), ("uu", "u"), ("ai
            ("ae", "e"), ("ei", "e"), ("ey", "e"), ("au", "o"), ("ou", "o"), ("eh", "ah")]  # fmt: skip
 
 
+@lru_cache(maxsize=8192)
 def phonetic(word: str) -> str:
     """Script-independent spelling key: "यूहन्ना"/"yuhanna" -> "yuhn", "पहला"/"pehla" -> "phl".
 
