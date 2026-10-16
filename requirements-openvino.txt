@@ -1,0 +1,3 @@
+# Optional: Whisper on Intel CPU / Arc integrated GPU via OpenVINO GenAI
+# (pulls in openvino and openvino-tokenizers of the same version).
+openvino-genai==2026.4.1.0
