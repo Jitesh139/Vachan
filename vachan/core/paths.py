@@ -14,3 +14,4 @@ DATA_DIR = RESOURCE_DIR / "data"
 LOGS_DIR = APP_DIR / "logs"
 DEBUG_AUDIO_DIR = APP_DIR / "debug_audio"
 SETTINGS_FILE = APP_DIR / "settings.json"
+CORPUS_DIR = APP_DIR / "data" / "corpus"  # missed verses from real services (local, git-ignored)

@@ -93,3 +93,6 @@ temp/
 
 # Per-user settings written by the app
 settings.json
+
+# Missed-verse corpus from real services (stays on this machine)
+data/corpus/

@@ -6,6 +6,8 @@ import html
 import logging
 import os
 import threading
+import time
+from collections import deque
 from dataclasses import asdict
 from typing import Optional
 
@@ -25,6 +27,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -42,6 +45,7 @@ from PySide6.QtWidgets import (
 
 from vachan.audio.source import LiveAudioSource, list_input_devices
 from vachan.core.approval import describe_warning, should_auto_show
+from vachan.core.corpus import MISSED_FILE, WINDOW_SEC, save_missed
 from vachan.core.models import ChunkDebugInfo, Suggestion
 from vachan.core.paths import LOGS_DIR
 from vachan.core.pipeline import PipelineEvents, PipelineWorker
@@ -146,6 +150,10 @@ class ControlWindow(QMainWindow):
         self._listening = False
         self._transcript_chars = 0
         self._partial_chars = 0  # greyed unfinished words at the end of the transcript
+        self.clock = time.monotonic
+        self.missed_file = MISSED_FILE
+        self._recent: deque = deque(maxlen=100)  # (time, text, language) for "Missed verse"
+        self._recent_audio: deque = deque(maxlen=100)  # (time, saved wav path)
 
         self.setWindowTitle("Vachan - Operator")
         self.resize(1280, 800)
@@ -258,6 +266,10 @@ class ControlWindow(QMainWindow):
         clear.setObjectName("Ghost")
         clear.clicked.connect(self._clear_transcript)
         top.addWidget(clear)
+        self.btn_missed = QPushButton("Missed verse   F7")
+        self.btn_missed.setObjectName("Ghost")
+        self.btn_missed.setToolTip("Save the last 30 s of transcript with the reference you type")
+        top.addWidget(self.btn_missed)
         lay.addLayout(top)
         self.transcript = QTextBrowser()
         self.transcript.document().setMaximumBlockCount(400)  # bounded memory for long services
@@ -460,6 +472,7 @@ class ControlWindow(QMainWindow):
         self.btn_dismiss.clicked.connect(self.dismiss)
         self.btn_clear_air.clicked.connect(self.clear_screen)
         self.btn_search.clicked.connect(self.manual_search)
+        self.btn_missed.clicked.connect(self.missed_verse)
         self.search.returnPressed.connect(self.manual_search)
         self.btn_debug.toggled.connect(self.debug_panel.setVisible)
         self.chk_save_audio.toggled.connect(lambda on: self._update_settings(save_debug_audio=on))
@@ -473,7 +486,8 @@ class ControlWindow(QMainWindow):
         for key, handler in [
             (Qt.Key.Key_Return, self._on_enter), (Qt.Key.Key_Enter, self._on_enter),
             (Qt.Key.Key_Escape, self._on_escape), (Qt.Key.Key_F5, self.toggle_listening),
-            (Qt.Key.Key_F8, self.clear_screen), (Qt.Key.Key_F9, self.toggle_output),
+            (Qt.Key.Key_F7, self.missed_verse), (Qt.Key.Key_F8, self.clear_screen),
+            (Qt.Key.Key_F9, self.toggle_output),
             (QKeySequence.StandardKey.Find, self.search.setFocus),
         ]:  # fmt: skip
             QShortcut(QKeySequence(key), self, activated=handler)
@@ -583,6 +597,39 @@ class ControlWindow(QMainWindow):
         self.search.clear()
         self.search.clearFocus()
         self._set_suggestion(suggestion)
+
+    def missed_verse(self) -> None:
+        """Vachan missed a reference (F7): ask which one, save it with what was heard."""
+        heard = " ".join(text for _, text, _ in self._recent_window()) or "(nothing heard)"
+        typed, ok = QInputDialog.getText(
+            self, "Missed verse", f"Which reference did the preacher say?\n\nLast 30 s: {heard[-400:]}"
+        )
+        if ok and typed.strip() and self.save_missed_verse(typed) is None:
+            self._hint(f"'{typed}' was not recognised as a reference. Nothing saved.")
+
+    def save_missed_verse(self, typed: str) -> Optional[str]:
+        """Append the last 30 s + the typed reference to the corpus; the reference, or None."""
+        result = self.parser.parse(typed, typed=True)
+        if result is None or not result.is_valid:
+            return None
+        now = self.clock()
+        segments = [{"t": round(t - now, 1), "text": x, "lang": lang} for t, x, lang in self._recent_window()]
+        audio = [p for t, p in self._recent_audio if now - t <= WINDOW_SEC]
+        expected = result.reference.format_reference()
+        context = self.on_air.reference.format_reference() if self.on_air else None
+        try:
+            save_missed(segments, expected, context, audio, self.missed_file)
+        except OSError as e:
+            self._show_error(f"Could not save the missed verse: {e}")
+            return None
+        self.search_hint.setText(f"Saved missed {expected} with {len(segments)} transcript lines.")
+        self.search_hint.setStyleSheet(f"color: {theme.GREEN};")
+        self.search_hint.show()
+        return expected
+
+    def _recent_window(self) -> list[tuple[float, str, str]]:
+        now = self.clock()
+        return [r for r in self._recent if now - r[0] <= WINDOW_SEC]
 
     def _hint(self, text: str) -> None:
         self.search_hint.setText(text)
@@ -694,6 +741,7 @@ class ControlWindow(QMainWindow):
         self.delay_label.setStyleSheet(f"color: {theme.GREEN if seconds <= 3.0 else theme.AMBER};")
 
     def _on_transcript(self, text: str, language: str) -> None:
+        self._recent.append((self.clock(), text, language))
         cursor = self._drop_partial()
         cursor.setCharFormat(QTextCharFormat())
         if self._transcript_chars > 260 or self.transcript.document().isEmpty():
@@ -779,6 +827,7 @@ class ControlWindow(QMainWindow):
         )
         if d.audio_saved_path:
             line += f"\n   audio:   {d.audio_saved_path}"
+            self._recent_audio.append((self.clock(), d.audio_saved_path))
         self.debug_log.appendPlainText(line)
 
     def closeEvent(self, event) -> None:  # noqa: N802

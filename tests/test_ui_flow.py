@@ -8,6 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
 from tests.test_pipeline import FakeSTT, bible  # noqa: E402, F401  (fixture)
+from vachan.core.corpus import load_missed  # noqa: E402
 from vachan.core.settings import Settings  # noqa: E402
 from vachan.output.verse_window import VerseDisplayWindow  # noqa: E402
 from vachan.parser import ReferenceParser  # noqa: E402
@@ -161,3 +162,19 @@ def test_partial_words_replaced_by_final_and_chip_survives(win):
 def test_footer_shows_measured_delay(win):
     win._on_latency(1.84)
     assert win.delay_label.text() == "delay 1.8 s"
+
+
+def test_missed_verse_saves_recent_transcript(win, tmp_path):
+    win.missed_file = tmp_path / "missed.jsonl"
+    win.clock.t = 1000.0
+    win._on_transcript("this is too old", "en")
+    win.clock.t = 1040.0
+    win._on_transcript("यूहन्ना रचित सुसमाचार", "hi")
+    win.clock.t = 1043.0
+    win._on_transcript("दूसरा अध्याय पहला वचन", "hi")
+    assert win.save_missed_verse("not a reference") is None
+    assert win.save_missed_verse("jn 2:1") is not None
+    (entry,) = load_missed(win.missed_file)
+    assert entry["expected"] == "John 2:1"
+    assert [s["text"] for s in entry["segments"]] == ["यूहन्ना रचित सुसमाचार", "दूसरा अध्याय पहला वचन"]
+    assert entry["segments"][-1]["t"] == 0.0 and entry["context"] is None
