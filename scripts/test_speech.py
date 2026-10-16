@@ -5,7 +5,8 @@
     python scripts/test_speech.py --wav my.wav    # your own recording(s)
     python scripts/test_speech.py --mic 8         # record 8 s from the selected input
     python scripts/test_speech.py --list-devices
-Options: --device cpu|cuda|auto, --model NAME (overrides the GPU/CPU default).
+    python scripts/test_speech.py --set hindi --language hi   # natural spoken-Hindi citations
+Options: --device cpu|cuda|auto, --model NAME (overrides the GPU/CPU default), --language auto|hi|en.
 """
 
 from __future__ import annotations
@@ -47,6 +48,28 @@ SAMPLES = [
     ("hi", "आज हम भजन संहिता 91 | पद 2 पढ़ेंगे", "Psalms 91:2", None),
     ("en", "Please turn with me to Psalms 91", "Psalms 91:1 (GUESS)", None),  # chapter only
 ]
+JOHN_2_1 = BibleReference("JHN", "John", 2, 1)
+# Natural Hindi preaching (tests/test_parser_spoken_hindi.py SEED), spoken by a Hindi voice
+HINDI_SAMPLES = [
+    ("hi", "यूहन्ना रचित सुसमाचार दूसरा अध्याय पहला वचन", "John 2:1", None),
+    ("hi", "yahunna racchit susamachar dusra adhyay pehla vachan", "John 2:1", None),
+    ("hi", "आइए हम खोलें मत्ती रचित सुसमाचार के पाँचवें अध्याय का तीसरा वचन", "Matthew 5:3", None),
+    ("hi", "luka rachit susamachar chautha adhyay solahwa pad", "Luke 4:16", None),
+    ("hi", "रोमियों की पत्री आठवें अध्याय का अट्ठाईसवाँ पद", "Romans 8:28", None),
+    ("hi", "कुरिन्थियों की पहली पत्री तेरहवाँ अध्याय चौथा पद", "1 Corinthians 13:4", None),
+    ("hi", "भजन संहिता इक्यानवे अध्याय दूसरा पद", "Psalms 91:2", None),
+    ("hi", "प्रेरितों के काम दूसरे अध्याय का चौथा वचन", "Acts 2:4", None),
+    ("hi", "उत्पत्ति पहले अध्याय का पहला वचन", "Genesis 1:1", None),
+    ("hi", "इफिसियों दूसरे अध्याय का आठवाँ और नौवाँ पद", "Ephesians 2:8-9", None),
+    ("hi", "नीतिवचन तीसरे अध्याय पाँचवें और छठे पद", "Proverbs 3:5-6", None),
+    ("hi", "यूहन्ना की पहली पत्री चौथा अध्याय आठवाँ वचन", "1 John 4:8", None),
+    ("hi", "प्रकाशित वाक्य इक्कीसवाँ अध्याय चौथा पद", "Revelation 21:4", None),
+    ("hi", "john ke teesre adhyay ka solahwa vachan", "John 3:16", None),
+    ("en", "chapter 3 verse 16 of John", "John 3:16", None),
+    ("hi", "अगला वचन", "John 2:2", JOHN_2_1),
+    ("hi", "पिछला पद", "John 3:15", JOHN_3_16),
+    ("hi", "अब सातवें वचन में", "John 2:7", JOHN_2_1),
+]
 SAMPLE_DIR = APP_DIR / "tmp" / "speech_samples"
 
 
@@ -59,7 +82,7 @@ def synthesize(voice: str, text: str, index: int) -> Path:
     'a | b' speaks a, pauses 1.5 s, then speaks b (a reference split by a pause).
     """
     voice = VOICES.get(voice, voice)
-    path = SAMPLE_DIR / f"sample_{index}_{voice}.wav"
+    path = SAMPLE_DIR / f"sample_{index}_{voice}.wav"  # index may be "h3" (hindi set)
     if "|" in text:
         if not path.exists():
             texts = [t.strip() for t in text.split("|")]
@@ -81,7 +104,15 @@ def synthesize(voice: str, text: str, index: int) -> Path:
         chunks = [c["data"] async for c in edge_tts.Communicate(text, voice).stream() if c["type"] == "audio"]
         return b"".join(chunks)
 
-    dec = miniaudio.decode(asyncio.run(fetch()), nchannels=1, output_format=miniaudio.SampleFormat.FLOAT32)
+    for attempt in range(5):  # the TTS service drops rapid repeat connections now and then
+        try:
+            data = asyncio.run(fetch())
+            break
+        except OSError:
+            if attempt == 4:
+                raise
+            time.sleep(5 * 2**attempt)
+    dec = miniaudio.decode(data, nchannels=1, output_format=miniaudio.SampleFormat.FLOAT32)
     audio = resample_poly(np.array(dec.samples, np.float32), 16000, dec.sample_rate)
     audio = np.concatenate([np.zeros(8000), audio, np.zeros(40000)])
     write_wav(path, audio)
@@ -107,10 +138,14 @@ def read_wav(path: Path) -> np.ndarray:
     return src._audio if sr == 16000 else resample_poly(src._audio, 16000, sr).astype(np.float32)
 
 
+ROWS: list[tuple[str, str, str, str, bool]] = []  # spoken, whisper, parsed, expected, ok
+
+
 def run_direct(worker: PipelineWorker, audio: np.ndarray, expected: str | None) -> bool:
     """Whole clip through Whisper, then the pipeline's own parse + lookup code."""
     t = worker.transcriber.transcribe(audio)
     print(f"  transcript ({t.language}, {t.seconds:.2f}s): {t.text!r}")
+    ROWS.append(("", f"[{t.language}] {t.text}", "", expected or "", False))
     line, suggestion = worker._handle_text(t.text)
     if suggestion is None:  # chapter only: let the verse wait run out
         worker._clock = lambda: time.monotonic() + worker.settings.verse_wait_sec + 1
@@ -161,6 +196,8 @@ def report(line: str, suggestion, expected: str | None) -> bool:
         ok = expected is None or ref == expected
     if expected:
         print(f"  {'PASS' if ok else 'FAIL'} (expected {expected})")
+    if ROWS and not ROWS[-1][2]:
+        ROWS[-1] = (ROWS[-1][0], ROWS[-1][1], label(suggestion) if suggestion else "-", ROWS[-1][3], ok)
     return ok
 
 
@@ -175,6 +212,8 @@ def main() -> int:
     ap.add_argument("--device", default=None, choices=["auto", "cpu", "cuda"])
     ap.add_argument("--model", default=None)
     ap.add_argument("--profile", default=None, choices=["auto", "accurate", "balanced", "fast", "custom"])
+    ap.add_argument("--language", default=None, choices=["auto", "hi", "en"])
+    ap.add_argument("--set", default="default", choices=["default", "hindi"], help="sample phrases")
     args = ap.parse_args()
 
     if args.list_devices:
@@ -191,6 +230,8 @@ def main() -> int:
         settings.profile = "custom"
     if args.profile:
         settings.profile = args.profile
+    if args.language:
+        settings.language = args.language
     stt = ProfileTranscriber(settings)
     stt.load(lambda msg: print(f"[stt] {msg}"))
     if stt.fallback_reason:
@@ -215,8 +256,9 @@ def main() -> int:
     elif args.wav:
         cases += [(str(p), p, None, None) for p in args.wav]
     else:
-        for i, (voice, text, expected, ctx) in enumerate(SAMPLES):
-            cases.append((text, synthesize(voice, text, i), expected, ctx))
+        samples, prefix = (HINDI_SAMPLES, "h") if args.set == "hindi" else (SAMPLES, "")
+        for i, (voice, text, expected, ctx) in enumerate(samples):
+            cases.append((text, synthesize(voice, text, f"{prefix}{i}" if prefix else i), expected, ctx))
 
     passed = 0
     for label, path, expected, ctx in cases:
@@ -228,6 +270,12 @@ def main() -> int:
         else:
             ok = run_direct(worker, read_wav(path), expected)
         passed += ok
+        if ROWS and not ROWS[-1][0]:
+            ROWS[-1] = (label,) + ROWS[-1][1:]
+    if ROWS:
+        print("\n| spoken | Whisper wrote | parser | expected | ok |\n|---|---|---|---|---|")
+        for spoken, heard, got, want, ok in ROWS:
+            print(f"| {spoken} | {heard} | {got} | {want} | {'PASS' if ok else 'FAIL'} |")
     engine = f"{stt.profile}: Whisper {stt.model_name} on {stt.device.upper()}"
     print(f"\n{passed}/{len(cases)} passed  ({engine})")
     return 0 if passed == len(cases) else 1

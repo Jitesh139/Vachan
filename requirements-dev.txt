@@ -2,6 +2,6 @@
 pytest==9.1.1
 ruff==0.17.0
 black==26.10.1
-edge-tts==7.2.8
+edge-tts==7.3.1
 miniaudio==1.71
 pyinstaller==6.22.3
