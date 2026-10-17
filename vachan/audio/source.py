@@ -133,43 +133,75 @@ class LiveAudioSource(_RingAudio):
         self._stream = None
         self.stream_error = ""
 
-    def _resolve(self) -> Optional[int]:
+    def _candidates(self) -> list[tuple[int, object]]:
+        """(device index, extra_settings) to try: the WASAPI device, then the same device via MME."""
+        import sounddevice as sd
+
         devices = list_input_devices()
-        for d in devices:
-            if d["name"] == self.requested_device:
-                return d["index"]
-        if self.requested_device:
-            log.warning("Input '%s' not found; using default", self.requested_device)
-        return devices[0]["index"] if devices else None
+        index = next((d["index"] for d in devices if d["name"] == self.requested_device), None)
+        if index is None:
+            if self.requested_device:
+                log.warning("Input '%s' not found; using default", self.requested_device)
+            if not devices:
+                return []
+            index = devices[0]["index"]
+        apis, all_devices = sd.query_hostapis(), sd.query_devices()
+        name = all_devices[index]["name"]
+        wasapi = "WASAPI" in apis[all_devices[index]["hostapi"]]["name"]
+        # auto_convert lets Windows convert rate/channels instead of refusing the format (USB mixers)
+        out = [(index, sd.WasapiSettings(auto_convert=True) if wasapi else None)]
+        for i, d in enumerate(all_devices):  # MME cuts names to 31 chars
+            if i != index and apis[d["hostapi"]]["name"] == "MME" and d["max_input_channels"] > 0 and name.startswith(d["name"]):
+                out.append((i, None))
+                break
+        return out
 
     def start(self) -> None:
         """Open the input stream; raises RuntimeError with a readable message."""
         import sounddevice as sd
 
         self.stop()
-        index = self._resolve()
-        if index is None:
+        # PortAudio lists devices once at init; rescan so a USB input plugged in (or re-plugged) later is found
+        sd._terminate()
+        sd._initialize()
+        candidates = self._candidates()
+        if not candidates:
             raise RuntimeError("No microphone / audio input found. Plug one in and press Start.")
-        info = sd.query_devices(index)
+        errors = []
+        for index, extra in candidates:
+            info = sd.query_devices(index)
+            for channels in dict.fromkeys((min(2, int(info["max_input_channels"])), 1)):
+                try:
+                    self._open(index, info, channels, extra)
+                    return
+                except Exception as e:
+                    log.warning("Could not open %s (index %d, %d ch): %s", info["name"], index, channels, e)
+                    errors.append(str(e))
+        raise RuntimeError(f"Could not open '{sd.query_devices(candidates[0][0])['name']}': {errors[0]}")
+
+    def _open(self, index: int, info, channels: int, extra) -> None:
+        import sounddevice as sd
+
         sr = int(info["default_samplerate"])
-        channels = min(2, int(info["max_input_channels"]))
         self._reset(sr)
         self.device_name, self.stream_error = info["name"], ""
+        stream = sd.InputStream(
+            device=index,
+            samplerate=sr,
+            channels=channels,
+            dtype="float32",
+            blocksize=int(sr * 0.05),
+            callback=self._callback,
+            finished_callback=self._finished,
+            extra_settings=extra,
+        )
         try:
-            self._stream = sd.InputStream(
-                device=index,
-                samplerate=sr,
-                channels=channels,
-                dtype="float32",
-                blocksize=int(sr * 0.05),
-                callback=self._callback,
-                finished_callback=self._finished,
-            )
-            self._stream.start()
-        except Exception as e:
-            self._stream = None
-            raise RuntimeError(f"Could not open '{info['name']}': {e}") from e
-        log.info("Audio: %s @ %d Hz, %d ch", self.device_name, sr, channels)
+            stream.start()
+        except Exception:
+            stream.close()
+            raise
+        self._stream = stream
+        log.info("Audio: %s @ %d Hz, %d ch (index %d)", self.device_name, sr, channels, index)
 
     def _callback(self, indata, frames, time_info, status) -> None:
         if status.input_overflow:
